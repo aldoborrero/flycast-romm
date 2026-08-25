@@ -119,14 +119,14 @@ func (c *channel) Do(ctx context.Context, timeout time.Duration, verb string, ar
 		return fmt.Errorf("staging command: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := tmp.WriteString(line); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("writing command: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("flushing command: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

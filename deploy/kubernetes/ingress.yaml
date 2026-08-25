@@ -1,0 +1,35 @@
+# RomM embeds this URL in an iframe, and Selkies needs a secure context for
+# WebRTC, so TLS is not optional: a plain-HTTP host is blocked as mixed content
+# the moment RomM itself is served over HTTPS.
+#
+# The backend speaks TLS on 3001 with a self-signed certificate, so the proxy
+# has to be told to talk HTTPS upstream and not to verify it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: flycast-stream
+  annotations:
+    # nginx-ingress. RKE2 ships this controller by default.
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/proxy-ssl-verify: "off"
+    # WebRTC signalling is a long-lived WebSocket.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - flycast.example.com # customise
+      secretName: flycast-stream-tls
+  rules:
+    - host: flycast.example.com # customise
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: flycast-stream
+                port:
+                  name: stream

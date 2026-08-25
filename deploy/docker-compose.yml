@@ -1,0 +1,84 @@
+# Flycast streaming for RomM.
+#
+# One container serves every Flycast platform: dc, naomi, naomi2 and
+# atomiswave are four entries in RomM's config.yml pointing at this one
+# broker_host, and RomM keys its session lock on that URL, so the four
+# correctly share a single session.
+#
+# Start it with:
+#   STREAMING_BROKER_SECRET=... docker compose up -d
+services:
+  flycast:
+    image: lscr.io/linuxserver/flycast:latest
+    container_name: flycast
+    restart: unless-stopped
+
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+
+      # The mod. Pin a tag in production: `latest` moves under you.
+      - DOCKER_MODS=ghcr.io/aldoborrero/flycast-romm-integration:latest
+
+      # Must equal RomM's STREAMING_BROKER_SECRET. Without it the broker
+      # accepts every request, and it runs as root inside this container.
+      - BROKER_SECRET=${STREAMING_BROKER_SECRET:?set STREAMING_BROKER_SECRET}
+
+      # Must equal the path RomM's own library is mounted at. RomM sends the
+      # broker an absolute path derived from its LIBRARY_BASE_PATH and assumes
+      # this container sees the identical path; a mismatch 422s every launch.
+      - ROM_ROOT=/romm/library
+
+      # Fixed resolution. A stream that renegotiates its size mid-session
+      # makes Flycast's window jump, and the Dreamcast's native 640x480 scales
+      # cleanly to 1280x960.
+      - SELKIES_IS_MANUAL_RESOLUTION_MODE=true
+      - SELKIES_MANUAL_WIDTH=1280
+      - SELKIES_MANUAL_HEIGHT=960
+
+      # PASSWORD is deliberately unset: RomM embeds this UI in an iframe, and
+      # HTTP basic auth would prompt inside it. Keep the stream ports on a
+      # network only RomM and its users can reach, or put an authenticating
+      # proxy in front.
+      - TITLE=Flycast
+
+      # RESTART_APP must stay off. Its watchdog relaunches the desktop's
+      # autostart script and fights the broker for the emulator process.
+
+      # Uncomment if the browser reports "a critical video error occurred" two
+      # or three times before the stream settles: that is Selkies' VAAPI
+      # encoder path failing and falling back.
+      # - SELKIES_USE_CPU=true
+
+    volumes:
+      - ./flycast-config:/config
+      # Dreamcast BIOS goes in ./flycast-config/.local/share/flycast/
+      # (dc_boot.bin, dc_flash.bin); NAOMI and Atomiswave want naomi.zip and
+      # awbios.zip in the same place.
+      - /srv/romm/library:/romm/library:ro
+
+    devices:
+      # A GPU is not optional in practice. llvmpipe renders Dreamcast titles
+      # well under 60fps, and the Selkies encoder wants the render node too.
+      - /dev/dri:/dev/dri
+
+    # The linuxserver image documents this as required for Flycast.
+    shm_size: 1gb
+
+    ports:
+      - "3001:3001" # Selkies stream over TLS, what RomM's `host` points at
+      - "8000:8000" # broker API, what RomM's `broker_host` points at
+
+    healthcheck:
+      # /health is the one route that does not require the shared secret,
+      # precisely so a healthcheck can call it.
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:8000/health >/dev/null || exit 1",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3

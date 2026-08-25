@@ -58,7 +58,7 @@ func TestWaitForStateWriteWaitsForTheSizeToSettle(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		for range 8 {
 			_, _ = f.Write(make([]byte, 4096))
 			_ = f.Sync()

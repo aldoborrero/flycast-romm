@@ -1,0 +1,13 @@
+# A pre-applied image, for environments that cannot use DOCKER_MODS at runtime
+# (an air-gapped registry, or a policy that forbids containers pulling at boot).
+#
+#   docker build -f deploy/Dockerfile.bundled -t my-registry/flycast-romm .
+#
+# This is the one artefact in the repository that needs a Docker daemon; the
+# mod image itself is built by Nix without one. Baking the mod in is exactly
+# what the loader does at runtime, so the behaviour is identical — you give up
+# being able to update the mod without rebuilding.
+FROM ghcr.io/aldoborrero/flycast-romm-integration:latest AS mod
+
+FROM lscr.io/linuxserver/flycast:latest
+COPY --from=mod / /

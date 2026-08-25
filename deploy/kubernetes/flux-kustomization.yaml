@@ -1,0 +1,37 @@
+# Flux example. Apply this to the cluster; Flux reconciles the manifests above
+# from the repository, so the deployment tracks the branch instead of whatever
+# was last applied by hand.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: flycast-romm
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: https://github.com/aldoborrero/flycast-romm
+  ref:
+    branch: main
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: flycast-streaming
+  namespace: flux-system
+spec:
+  interval: 10m
+  path: ./deploy/kubernetes
+  prune: true
+  wait: true
+  timeout: 15m # a cold start pulls the mod and boots a desktop
+  sourceRef:
+    kind: GitRepository
+    name: flycast-romm
+  targetNamespace: romm-streaming
+  # The broker secret does not belong in git. Point this at a SealedSecret or
+  # an ExternalSecret in your own repository and drop secret.yaml from the
+  # kustomization.
+  # postBuild:
+  #   substituteFrom:
+  #     - kind: Secret
+  #       name: flycast-broker

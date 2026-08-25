@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: flycast-config
+spec:
+  accessModes:
+    # ReadWriteOnce is correct and not a limitation: the Deployment is a single
+    # replica by design. Flycast's savestates, VMU images and emu.cfg all live
+    # here, and two emulators writing them would corrupt both.
+    - ReadWriteOnce
+  resources:
+    requests:
+      # BIOS, savestates and VMU images. Savestates are a few MB each and
+      # RomM never prunes them.
+      storage: 5Gi
+  # storageClassName: longhorn

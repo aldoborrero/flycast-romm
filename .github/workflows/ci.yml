@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      # `nix flake check` covers the Go tests (checks.go-test), the mod image
+      # and its layout (checks.mod-layout), and the devshell. It skips
+      # aarch64-linux on an x86 runner rather than failing, which is what we
+      # want here; the release workflow builds that arch on its own runner.
+      - name: nix flake check
+        run: nix flake check --print-build-logs
+
+      - name: nix fmt
+        run: nix fmt -- --fail-on-change
+
+      # Everything above builds the broker as a Nix package. This is the same
+      # code under `go vet`, which buildGoModule does not run.
+      - name: go vet
+        run: nix develop --command go vet ./...
+
+      - name: golangci-lint
+        run: nix develop --command golangci-lint run --timeout 5m
+
+  # The mod is a static binary with no dependencies, so this is only ever about
+  # the Go standard library — which is exactly the kind of advisory that is easy
+  # to miss without a check. It needs the network, so it is allowed to fail the
+  # job rather than block a merge on an upstream outage.
+  vulncheck:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: nix develop --command govulncheck ./...

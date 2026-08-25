@@ -1,0 +1,159 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flycast
+  labels:
+    app.kubernetes.io/name: flycast
+spec:
+  # One replica, always. RomM holds a single session per broker URL, the
+  # savestate volume is ReadWriteOnce, and a second pod would be a second
+  # emulator answering the same Service at random.
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: the new pod cannot attach the RWO volume or
+    # the GPU while the old one holds them, and a rollout that briefly runs two
+    # emulators would corrupt savestates.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flycast
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flycast
+    spec:
+      securityContext:
+        # The linuxserver entrypoint starts as root, drops to abc (PUID/PGID)
+        # for the emulator, and the broker stays root so it can sudo to abc and
+        # reach abc's PulseAudio socket. runAsNonRoot would break the image's
+        # own init, so it is deliberately absent.
+        fsGroup: 1000
+
+      containers:
+        - name: flycast
+          image: lscr.io/linuxserver/flycast:latest
+          imagePullPolicy: IfNotPresent
+
+          securityContext:
+            allowPrivilegeEscalation: true # sudo -u abc, see above
+            readOnlyRootFilesystem: false # s6 writes to /run, /var, /etc
+            capabilities:
+              drop: ["ALL"]
+              # CHOWN/SETUID/SETGID are what the linuxserver init needs to
+              # create abc and hand it /config; DAC_OVERRIDE is what sudo needs.
+              add: ["CHOWN", "SETUID", "SETGID", "DAC_OVERRIDE", "FOWNER"]
+
+          env:
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: TZ
+              value: Etc/UTC
+            - name: DOCKER_MODS
+              # Pin a tag. `latest` turns every pod restart into an
+              # unreviewed upgrade.
+              value: ghcr.io/aldoborrero/flycast-romm-integration:latest
+            - name: ROM_ROOT
+              # Must match the path RomM mounts its library at.
+              value: /romm/library
+            - name: BROKER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: flycast-broker
+                  key: broker-secret
+            - name: SELKIES_IS_MANUAL_RESOLUTION_MODE
+              value: "true"
+            - name: SELKIES_MANUAL_WIDTH
+              value: "1280"
+            - name: SELKIES_MANUAL_HEIGHT
+              value: "960"
+            - name: TITLE
+              value: Flycast
+
+          ports:
+            - name: stream
+              containerPort: 3001
+            - name: broker
+              containerPort: 8000
+
+          resources:
+            requests:
+              cpu: "2"
+              memory: 2Gi
+            limits:
+              memory: 4Gi
+              # GPU. Two shapes, pick one and delete the other:
+              #
+              # 1. A device plugin that exposes render nodes as a resource.
+              #    AMD:    amd.com/gpu: 1
+              #    NVIDIA: nvidia.com/gpu: 1   (plus the NVIDIA runtime class)
+              #    Intel:  gpu.intel.com/i915: 1
+              #    This is the right answer on a multi-tenant cluster: the
+              #    scheduler knows the GPU is taken.
+              #
+              # amd.com/gpu: 1
+              #
+              # 2. A hostPath on /dev/dri, below. Simpler on a single-node
+              #    RKE2 host with no device plugin installed, but the
+              #    scheduler has no idea the device exists, so nothing stops
+              #    a second GPU workload landing on the same node.
+
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: roms
+              mountPath: /romm/library
+              readOnly: true
+            - name: dshm
+              mountPath: /dev/shm
+            # Shape 2 only: delete this with the volume below if you used a
+            # device plugin.
+            - name: dri
+              mountPath: /dev/dri
+
+          # /health is the only unauthenticated route, which is what makes it
+          # usable here at all.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: broker
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: broker
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          startupProbe:
+            # A cold start pulls the mod, compiles the s6 database, brings up
+            # the compositor and boots Flycast. Ten minutes of headroom keeps
+            # a slow first pull from being read as a crash loop.
+            httpGet:
+              path: /health
+              port: broker
+            periodSeconds: 10
+            failureThreshold: 60
+
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: flycast-config
+        - name: roms
+          persistentVolumeClaim:
+            # The same volume RomM mounts, at the same path. On a cluster
+            # where that is an NFS share, both pods can mount it ReadOnlyMany.
+            claimName: romm-library
+            readOnly: true
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            # The linuxserver image documents shm_size=1gb as required.
+            sizeLimit: 1Gi
+        - name: dri
+          hostPath:
+            path: /dev/dri
+            type: Directory

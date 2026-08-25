@@ -1,0 +1,28 @@
+# The broker API. ClusterIP only: it is server-to-server, RomM's backend is
+# the only client, and it carries the shared secret in a plain HTTP header.
+apiVersion: v1
+kind: Service
+metadata:
+  name: flycast-broker
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: flycast
+  ports:
+    - name: broker
+      port: 8000
+      targetPort: broker
+---
+# The Selkies stream. This one is browser-facing and goes through the Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: flycast-stream
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: flycast
+  ports:
+    - name: stream
+      port: 3001
+      targetPort: stream

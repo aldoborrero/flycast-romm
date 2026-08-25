@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to publish (e.g. v1.2.3)
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: flycast-romm-integration
+
+jobs:
+  # One job per architecture, each on its own native runner. Nix builds the
+  # image and skopeo pushes it straight to the registry: no Docker daemon is
+  # involved at any point, which is the whole reason the mod is built with
+  # dockerTools rather than a Dockerfile.
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Resolve names
+        id: names
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "tag=${TAG}" >>"$GITHUB_OUTPUT"
+          echo "repo=${REGISTRY}/${OWNER}/${IMAGE}" >>"$GITHUB_OUTPUT"
+
+      - name: Build the mod image
+        run: nix build .#docker-mod --print-build-logs
+
+      # The layout check runs here too, not only in CI: this is the artefact
+      # that actually ships, and the mod loader reports nothing when it is
+      # wrong. A single layer is a hard requirement — docker-mods.v3 fetches
+      # `.layers[0].digest` and no other blob.
+      - name: Verify the image the loader will see
+        run: nix build .#checks.$(nix eval --raw --impure --expr builtins.currentSystem).mod-layout --print-build-logs
+
+      - name: Push the per-architecture image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          nix run nixpkgs#skopeo -- --insecure-policy copy \
+            --dest-creds "${{ github.actor }}:${GHCR_TOKEN}" \
+            docker-archive:./result \
+            "docker://${{ steps.names.outputs.repo }}:${{ steps.names.outputs.tag }}-${{ matrix.arch }}"
+
+  # The per-arch images above are not what an operator points DOCKER_MODS at.
+  # This stitches them into one index, which is what the mod loader expects:
+  # it selects a manifest by .platform.architecture. crane talks to the
+  # registry API directly, so this stays daemon-free too.
+  index:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Resolve names
+        id: names
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          MINOR=$(echo "${TAG}" | cut -d. -f1-2)
+          echo "tag=${TAG}" >>"$GITHUB_OUTPUT"
+          echo "minor=${MINOR}" >>"$GITHUB_OUTPUT"
+          echo "repo=${REGISTRY}/${OWNER}/${IMAGE}" >>"$GITHUB_OUTPUT"
+
+      - name: Create the multi-arch index and the floating tags
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO='${{ steps.names.outputs.repo }}'
+          TAG='${{ steps.names.outputs.tag }}'
+
+          crane() { nix run nixpkgs#crane -- "$@"; }
+          crane auth login "${REGISTRY}" -u '${{ github.actor }}' -p "${GHCR_TOKEN}"
+
+          crane index append \
+            -m "${REPO}:${TAG}-amd64" \
+            -m "${REPO}:${TAG}-arm64" \
+            -t "${REPO}:${TAG}"
+
+          # Floating tags, matching the sibling brokers: an exact version, the
+          # minor line for patch-only updates, and latest.
+          for alias in '${{ steps.names.outputs.minor }}' latest; do
+            crane copy "${REPO}:${TAG}" "${REPO}:${alias}"
+          done

@@ -201,7 +201,7 @@ func (h *harness) do(method, path, body string, withSecret bool) (int, map[strin
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, _ := io.ReadAll(resp.Body)
 	var out map[string]any

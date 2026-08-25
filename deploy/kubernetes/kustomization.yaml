@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: romm-streaming
+
+resources:
+  - namespace.yaml
+  - secret.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+# Fields worth overriding in an overlay rather than editing here:
+#
+#   deployment.yaml  DOCKER_MODS tag          pin it, do not ship `latest`
+#                    ROM_ROOT                 must match RomM's library mount
+#                    resources.limits         GPU resource or hostPath
+#                    SELKIES_MANUAL_*         stream resolution
+#   pvc.yaml         storageClassName, size
+#   ingress.yaml     host, cluster-issuer, ingressClassName
+#   secret.yaml      replace with a SealedSecret or ExternalSecret
+images:
+  - name: lscr.io/linuxserver/flycast
+    newTag: latest
