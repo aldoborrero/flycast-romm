@@ -506,6 +506,17 @@ flycast [-config section:key=value,...] [<rom path>]
   flags**: the only two options the parser knows are `-config` and `-help`;
   everything else is warned about and ignored.
 
+### `AppRun` is transparent
+
+`shell/linux/make-appimage.sh` generates `AppRun` as a three-line `/bin/sh`
+script that ends in `exec "$APPDIR/usr/bin/flycast" "$@"`. Because it `exec`s,
+the shell process is *replaced*: the PID the broker spawns **is** the Flycast
+process, so ordinary `Popen` + `wait()` supervision works with no wrapper-PID
+indirection, and `-config ...` arguments pass straight through. The script may
+prepend to `LD_LIBRARY_PATH` and `LD_PRELOAD` via `checkrt`, preserving anything
+already set — so an `LD_PRELOAD` the broker sets for the Selkies joystick
+interposer survives.
+
 ### Paths
 
 `core/linux-dist/main.cpp` — with `HOME=/config` inside the container:
@@ -625,78 +636,156 @@ filename set per platform is **UNVERIFIED** beyond those references.
 
 ---
 
-## 10. Open questions
+## 10. Decisions
 
-These change the design materially and are not mine to decide.
+The questions this document raised were put to the maintainer and answered on
+2026-08-25. What follows is the resolution for each, and the reasoning where the
+call was delegated back to me.
 
-**Q1 — `dc` is missing from RomM's capability table.** Save-state and load-state
-are dead on arrival for Dreamcast until `_PLATFORM_CAPABILITIES` gains entries.
-Which do we do?
-  a) Ship the broker with full slot support and open a PR against `rommapp/romm`
-     adding `dc`/`naomi`/`naomi2`/`atomiswave`, documenting that slots need
-     RomM ≥ the release that merges it;
-  b) Ship only what works unpatched today (launch / save-and-exit / volume /
-     mute / release) and add slots later;
-  c) Ship both and gate slots behind an env var.
-  My recommendation is (a): the broker implements the full contract, the README
-  states the RomM requirement plainly, and the PR is four lines. What slot
-  geometry should we propose — **1–9 manual + 10 autosave** (matching PCSX2/xemu)
-  fits Flycast's ten slots exactly if we map RomM slot *N* to Flycast index
-  *N-1*.
+### D1 — Save-state slots: implement the full contract (was Q1)
 
-**Q2 — Wayland or Xwayland?** Whether Flycast's SDL2 build presents a native
-Wayland surface or an X11 one under labwc cannot be settled from source; it needs
-`docker exec` on a running container. The answer decides whether `xdotool` is even
-an option. My plan is to not depend on it: **Lua for control, labwc IPC for
-window detection, `pactl` for audio**, with `wtype` as the fallback if Lua turns
-out to be unavailable at runtime. Do you want me to keep an xdotool path at all?
+The broker implements RomM's complete slot contract. The upstream PR adding
+`dc`, `naomi`, `naomi2` and `atomiswave` to `_PLATFORM_CAPABILITIES` is the
+maintainer's to open; this repository is written as though it has landed, and the
+README states the RomM version requirement.
 
-**Q3 — Should `/launch` block until the window appears?** Your Phase 1 brief asks
-for a `WaitForWindow` before answering OK. All three reference brokers answer
-immediately and launch in the background, and RomM's `/launch` timeout is **10
-seconds** — a cold Flycast start plus BIOS is usually inside that, but a
-first-run shader compile may not be, and a timeout is reported to the user as a
-502/503 *and* releases the claim while the emulator keeps booting. Options: (a)
-match the reference brokers, answer immediately, expose readiness on `/status`;
-(b) wait, with a hard cap around 8 s and answer OK anyway on timeout. I lean (b)
-— it gets your semantics without ever tripping RomM's timeout — but (a) is the
-compatible-by-default choice.
+Geometry, matching PCSX2/xemu so RomM's existing UI needs no special case:
 
-**Q4 — Is patching `/defaults/startwm_wayland.sh` acceptable?** Turning on the
-labwc IPC socket means a `sed` against a base-image file before `svc-de` starts,
-plus an `init-services` dependency edge. It is precedented (the PCSX2 mod patches
-nginx and selkies' `input_handler.py` the same way) but it breaks silently if
-linuxserver rewrites that script. The alternative is polling `pgrep` + a fixed
-settle delay, which is what we would fall back to anyway if the patch does not
-apply. Patch, or stay hands-off?
+| RomM slot | Meaning | Flycast `SavestateSlot` index | State file |
+|---|---|---|---|
+| 1–9 | manual | 0–8 | `<basename>_1.state` … `<basename>_8.state`, and `<basename>.state` for index 0 |
+| 10 | autosave, reserved for Save & Exit | 9 | `<basename>_9.state` |
+| 0 (on `/save-and-exit`) | alias for the autosave slot | 9 | `<basename>_9.state` |
 
-**Q5 — Volume through PulseAudio or through Flycast?** `pactl` matches the
-sibling brokers and works even on the idle GUI; `flycast.config.audio.AudioVolume`
-is in-process and survives sink churn. Doing both double-attenuates. I default to
-`pactl` unless you say otherwise.
+So `flycast_index = romm_slot - 1`, and Flycast's ten slots (`(n + 10 + step) %
+10`, verified in `core/ui/gui.cpp:520`) map exactly onto RomM's 1–10 with none
+left over. Note the off-by-one trap in the filenames: `getSavestatePath` writes no
+suffix at all for index 0, so RomM slot 1 is `<basename>.state`, not
+`<basename>_0.state`.
 
-**Q6 — `aarch64-linux` in `systems`.** `linuxserver/flycast` publishes **amd64
-only**. Building the mod for both is nearly free (a static Go binary, and the mod
-loader does select by architecture from a multi-arch index), but the arm64 mod
-would have no base image to attach to. Keep both systems in the flake and publish
-a multi-arch index anyway, or drop to x86_64 and say so?
+The proposed upstream entry:
 
-**Q7 — One container for four platforms.** `dc`, `naomi`, `naomi2` and
-`atomiswave` would be four `containers:` entries in `config.yml` all pointing at
-the same `broker_host`. RomM keys its session lock on the derived broker URL, so
-they correctly share one session — verified in
-`backend/tests/endpoints/test_streaming.py::test_claim_session_same_container_two_platforms_rejected`. Worth
-confirming you want that (rather than four containers) before the compose and
-Kubernetes examples get written around it.
+```python
+# Flycast (dc, naomi, naomi2, atomiswave): slots 1-9 manual, slot 10 autosave.
+"dc":         {"max_slots": 9, "has_autosave": True, "autosave_slot": 10},
+"naomi":      {"max_slots": 9, "has_autosave": True, "autosave_slot": 10},
+"naomi2":     {"max_slots": 9, "has_autosave": True, "autosave_slot": 10},
+"atomiswave": {"max_slots": 9, "has_autosave": True, "autosave_slot": 10},
+```
 
-**Q8 — Environment for this workspace.** `nix` is present at
-`/nix/var/nix/profiles/default/bin/nix` (Determinate Nix 3.22.2) but not on
-`PATH`, and no `nix-daemon` is running; `skopeo` is absent; Docker is installed
-but building/running the linuxserver image here is not something I have verified
-as possible. So `nix flake check` and `nix fmt` may be runnable, but an
-end-to-end smoke test against a live Flycast container is not. Everything in
-`docs/DEPLOY.md` will have to be marked as "not executed here" unless you have a
-host to run it on.
+### D2 — Emulator control goes through Flycast's Lua API (was Q2 and Q4)
+
+Delegated to me. **The broker controls Flycast through a Lua command channel, not
+through synthetic keystrokes, and the mod patches no base-image file.**
+
+Why not keystrokes. Flycast ships no default binding for save state, load state
+or slot cycling (`core/input/keyboard_device.h`), so a hotkey broker must first
+write a `mappings/*.cfg` in a format that is Flycast's, undocumented and free to
+change between releases. It would then have to guess whether `xdotool` (Xwayland)
+or `wtype` (Wayland virtual-keyboard) reaches the window, a question that cannot
+be answered from source and that changes with whatever SDL2 decides at runtime.
+And a keystroke is fire-and-forget: success can only ever be inferred by watching
+the filesystem.
+
+Why Lua. `USE_LUA` defaults `ON`, CI builds against `liblua5.3-dev`, and
+`make-appimage.sh` bundles `liblua5.3.so.0` into the AppImage the container
+extracts — so the interpreter is present in the shipped binary. `lua::init()`
+runs once in `flycast_init()` (`core/nullDC.cpp:110`), **after**
+`config::parseCommandLine` at line 82, so `-config config:LuaFileName=...` picks
+our script instead of clobbering a user's `flycast.lua`. `luaL_openlibs` gives the
+script `io` and `os`. The API addresses slots by index, so there is no selector to
+cycle, and `saveState` returns only once `dc_savestate` has written the file — the
+first mechanism in this broker family that can report a save from inside the
+emulator rather than by inferring it from stat() calls.
+
+Protocol, deliberately minimal, in `${FLYCAST_CONFIG_DIR}/romm-broker/`:
+
+| File | Written by | Contents |
+|---|---|---|
+| `ready` | Lua, at script load | one line, the protocol version — proves the script loaded |
+| `command` | broker, atomically (`write` + `rename`) | `<seq> <verb> [arg]` — `save N`, `load N`, `slot N`, `exit` |
+| `ack` | Lua, after executing | `<seq> ok` or `<seq> err <reason>` |
+| `state` | Lua, on `start` / `terminate` | `running` / `stopped` |
+
+The poll runs in the **`overlay`** callback, not `vblank`. `lua::overlay()` is
+invoked from `gui_draw_osd()` on the render/UI thread
+(`core/ui/gui.cpp:1479`, called from `core/rend/gles/gles.cpp:1058` and
+`core/rend/vulkan/vulkan_context.cpp:1174`), which is the thread
+`flycast.emulator.saveState` is shaped for — it calls `gui_open_settings()`,
+which calls `emu.stop()`, and driving that from the emulation thread on a `vblank`
+callback risks deadlocking against itself. `vblank` is left unused. The cost is
+that `overlay` only fires while a game is rendering, which is exactly and only
+when save/load are meaningful. **UNVERIFIED: the thread-safety reasoning is from
+reading the source, not from a running emulator** — the smoke test settles it.
+
+Two mechanisms stay as backstops, and are documented rather than wired in:
+
+- **Filesystem confirmation** is kept even though Lua acks the save. The broker
+  still polls the state file for a new-or-changed mtime and then a stable size
+  before it lets `/save-and-exit` kill the process, exactly as the Dolphin broker
+  does. A Lua ack that arrives before the OS has flushed is still a truncated
+  state.
+- **`wtype`** is present in the base image and is the fallback if Lua turns out to
+  be unavailable at runtime. The broker detects that case — no `ready` file
+  within the launch window — and reports it on `/health` instead of failing
+  silently. Whether the fallback is implemented at all is deferred until the
+  smoke test says whether it is ever needed.
+
+No base-image file is patched (this is the Q4 answer): the labwc IPC socket is
+**not** used, so `/defaults/startwm_wayland.sh` is left alone. Window readiness
+comes from the Lua `ready`/`state` files, which report that the emulator is
+actually running rather than that a surface exists — strictly better information,
+obtained without a `sed` that a linuxserver release can silently break.
+
+The mod does still write `$HOME/.config/labwc/autostart` to stop the desktop from
+launching its own Flycast, the way the Dolphin mod does. That is a file in the
+`/config` volume, not base-image content, and the oneshot that writes it takes an
+`init-services` dependency edge so it lands before `svc-de` reads it.
+`RESTART_APP` must stay off; its watchdog would fight the broker for the process
+and lock the autostart file to `root:abc 0550`.
+
+### D3 — `/launch` waits, but never past RomM's timeout
+
+Not contested, so my recommendation stands. `POST /launch` blocks until the Lua
+`state` file reports `running`, with a hard cap (`LAUNCH_WAIT`, default **8 s**)
+chosen to sit inside RomM's fixed 10-second budget. On timeout it answers `200`
+anyway with `"ready": false` rather than failing: the emulator is still coming up,
+and a 502 would release RomM's claim out from under a boot that is going to
+succeed.
+
+### D4 — Volume through PulseAudio
+
+Not contested. `pactl set-sink-volume @DEFAULT_SINK@ N%` as `abc`, matching the
+sibling brokers, working while the emulator sits on its game list, and leaving
+Flycast's own `AudioVolume` untouched so the two cannot double-attenuate.
+
+### D5 — Both systems in the flake (was Q6)
+
+Confirmed: `systems = [ "x86_64-linux" "aarch64-linux" ]`, and the mod is
+published as a proper multi-arch OCI index. `docker-mods.v3` selects by
+`.platform.architecture`, so the index costs nothing and is correct the day
+linuxserver publishes an arm64 flycast. The README states plainly that
+`lscr.io/linuxserver/flycast` is amd64-only today.
+
+The mod image is built with `dockerTools.buildImage` — **single layer,
+mandatory**, because the mod loader only ever fetches `layers[0]`.
+
+### D6 — One container, four platforms
+
+Not contested. `dc`, `naomi`, `naomi2` and `atomiswave` are four `containers:`
+entries in `config.yml` all pointing at one `broker_host`. RomM keys its session
+lock on the derived broker URL, so the four correctly share a single session —
+`backend/tests/endpoints/test_streaming.py::test_claim_session_same_container_two_platforms_rejected`
+covers exactly this shape. The compose and Kubernetes examples are written around
+one container.
+
+### D7 — What cannot be tested in this workspace
+
+`nix` is available (Determinate Nix 3.22.2, at
+`/nix/var/nix/profiles/default/bin/nix`) and Docker is installed, but no live
+Flycast container has been exercised here. Everything in `docs/DEPLOY.md` that
+requires a running emulator is recorded as **not executed**, with the exact
+commands to run it on a real host.
 
 ## 11. Known unknowns (not blocking, but unverified)
 
@@ -713,6 +802,9 @@ host to run it on.
   explicitly in the child environment.
 - Flycast's behaviour when handed a `.chd` for a NAOMI cart vs a Dreamcast disc —
   the CLI treats `.chd` as a CD image unconditionally.
-- Whether labwc's IPC `GET_WINDOW_BY_PID` reports the AppRun wrapper's PID or the
-  real `flycast` PID (AppRun is a shell/ELF wrapper; the view's PID is the client
-  process). Needs a live container.
+- Whether calling `flycast.emulator.saveState` from the Lua `overlay` callback is
+  safe in practice. The reasoning in D2 says yes (it is the render/UI thread, the
+  one `gui_open_settings` is shaped for) but only a running emulator proves it.
+- Whether the `overlay` callback fires often enough on a heavily loaded frame to
+  keep command latency acceptable. It is once per rendered frame, so it should
+  track the framerate, but a stalled renderer stalls the command channel too.
