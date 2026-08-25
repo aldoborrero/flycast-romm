@@ -11,18 +11,18 @@ memory.
 
 ## Sources read
 
-| What | Repository | Revision read |
-|---|---|---|
-| RomM backend + frontend | `rommapp/romm` | `76bc157` (2026-08-23, `master`) |
-| RomM docs | `docs.romm.app/5.1.0` | live site, 2026-08-25 |
-| PCSX2 broker | `LoneAngelFayt/pcsx2-romm-integration` | `main` @ clone date |
-| Dolphin broker | `LoneAngelFayt/dolphin-romm-integration` | `main` @ clone date |
-| xemu broker | `LoneAngelFayt/xemu-romm-integration` | `main` @ clone date |
-| Flycast container | `linuxserver/docker-flycast` | `main` @ clone date |
-| Selkies base image | `linuxserver/docker-baseimage-selkies` | `main` @ clone date |
-| Debian base image | `linuxserver/docker-baseimage-debian` | `master` @ clone date |
-| Mod loader | `linuxserver/docker-mods@mod-scripts/docker-mods.v3` | `3.20250825` |
-| Flycast | `flyinghead/flycast` | `c3763d8` (2026-08-23) |
+| What                    | Repository                                           | Revision read                    |
+| ----------------------- | ---------------------------------------------------- | -------------------------------- |
+| RomM backend + frontend | `rommapp/romm`                                       | `76bc157` (2026-08-23, `master`) |
+| RomM docs               | `docs.romm.app/5.1.0`                                | live site, 2026-08-25            |
+| PCSX2 broker            | `LoneAngelFayt/pcsx2-romm-integration`               | `main` @ clone date              |
+| Dolphin broker          | `LoneAngelFayt/dolphin-romm-integration`             | `main` @ clone date              |
+| xemu broker             | `LoneAngelFayt/xemu-romm-integration`                | `main` @ clone date              |
+| Flycast container       | `linuxserver/docker-flycast`                         | `main` @ clone date              |
+| Selkies base image      | `linuxserver/docker-baseimage-selkies`               | `main` @ clone date              |
+| Debian base image       | `linuxserver/docker-baseimage-debian`                | `master` @ clone date            |
+| Mod loader              | `linuxserver/docker-mods@mod-scripts/docker-mods.v3` | `3.20250825`                     |
+| Flycast                 | `flyinghead/flycast`                                 | `c3763d8` (2026-08-23)           |
 
 > Version note: the RomM documentation site is versioned `5.1.0`, while the git
 > repository's newest tag is `v2.3.1`. The `master` code read here matches the
@@ -45,7 +45,7 @@ memory.
   secret resolves. Resolution order (`_broker_secret`):
   1. `STREAMING_BROKER_SECRET` environment variable on the RomM backend
   2. `broker_secret` on the individual container entry in `config.yml`
-  No header at all is sent when both are empty.
+     No header at all is sent when both are empty.
 - `Content-Type: application/json` and an explicit `Content-Length` accompany
   every request that has a body. `DELETE /launch` is sent with no body.
 - The reference brokers compare the secret with `hmac.compare_digest` and answer
@@ -59,15 +59,15 @@ memory.
 Timeouts are RomM-side and are hard: `urlopen(timeout=...)`. Exceeding one is
 indistinguishable from a broker failure.
 
-| # | Method | Path | Request body | RomM timeout | Response RomM reads | Failure handling |
-|---|---|---|---|---|---|---|
-| 1 | `POST` | `/launch` | `{"rom_path": "<abs path>", "rom_name": "<display name>"}` | **10 s** | body logged only | `HTTPError` → RomM answers **502** `Broker returned <code>: <body>`; `URLError`/`OSError` → **503**. Either way the Redis claim is released. |
-| 2 | `DELETE` | `/launch` | *(none)* | 5 s | ignored | best-effort, never raises |
-| 3 | `POST` | `/save-and-exit` | `{"slot": <int 0-10>, "wait": <bool>}` | `STREAMING_SAVE_TIMEOUT` (**default 45 s**) when `wait=true`, **5 s** when `wait=false` | `{"saved": <bool>}` | any error → `saved=false`, HTTP 200 to the user |
-| 4 | `POST` | `/volume` | `{"level": <int 0-100>}` | 5 s | `{"status": "ok"}` | anything else → RomM answers **502** `Broker failed to set volume` |
-| 5 | `POST` | `/mute` | `{"mute": <bool>}` **or** `{}` to toggle | 5 s | `{"mute": <bool>}` | missing/erroring → **502** `Broker failed to set mute state` |
-| 6 | `POST` | `/save-state` | `{"slot": <int>}` | 5 s | `{"status": "saving"}` | anything else → **502** `Broker failed to save state` |
-| 7 | `POST` | `/load-state` | `{"slot": <int>}` | **60 s** | `{"loaded": true}` | falsy → **502** `Broker failed to load state` |
+| #   | Method   | Path             | Request body                                               | RomM timeout                                                                            | Response RomM reads    | Failure handling                                                                                                                             |
+| --- | -------- | ---------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `POST`   | `/launch`        | `{"rom_path": "<abs path>", "rom_name": "<display name>"}` | **10 s**                                                                                | body logged only       | `HTTPError` → RomM answers **502** `Broker returned <code>: <body>`; `URLError`/`OSError` → **503**. Either way the Redis claim is released. |
+| 2   | `DELETE` | `/launch`        | _(none)_                                                   | 5 s                                                                                     | ignored                | best-effort, never raises                                                                                                                    |
+| 3   | `POST`   | `/save-and-exit` | `{"slot": <int 0-10>, "wait": <bool>}`                     | `STREAMING_SAVE_TIMEOUT` (**default 45 s**) when `wait=true`, **5 s** when `wait=false` | `{"saved": <bool>}`    | any error → `saved=false`, HTTP 200 to the user                                                                                              |
+| 4   | `POST`   | `/volume`        | `{"level": <int 0-100>}`                                   | 5 s                                                                                     | `{"status": "ok"}`     | anything else → RomM answers **502** `Broker failed to set volume`                                                                           |
+| 5   | `POST`   | `/mute`          | `{"mute": <bool>}` **or** `{}` to toggle                   | 5 s                                                                                     | `{"mute": <bool>}`     | missing/erroring → **502** `Broker failed to set mute state`                                                                                 |
+| 6   | `POST`   | `/save-state`    | `{"slot": <int>}`                                          | 5 s                                                                                     | `{"status": "saving"}` | anything else → **502** `Broker failed to save state`                                                                                        |
+| 7   | `POST`   | `/load-state`    | `{"slot": <int>}`                                          | **60 s**                                                                                | `{"loaded": true}`     | falsy → **502** `Broker failed to load state`                                                                                                |
 
 Notes that matter for an implementation:
 
@@ -75,7 +75,7 @@ Notes that matter for an implementation:
   RomM checks `body.get("status") == "saving"`, not the HTTP code. Returning
   `{"status": "ok"}` fails the check.
 - **`/volume` is checked the same way**: `body.get("status") == "ok"`.
-- **`/mute` returns the *confirmed* state**, not the requested one. The reference
+- **`/mute` returns the _confirmed_ state**, not the requested one. The reference
   brokers read it back from PulseAudio after setting it
   (`_pactl_get_mute`). RomM forwards whatever comes back to the UI.
 - **`/load-state` gets a 60-second budget** because the PCSX2 broker may cycle a
@@ -83,7 +83,7 @@ Notes that matter for an implementation:
 - `rom_name` is sent by RomM but **every reference broker ignores it** and derives
   the display name from the resolved filename
   (`dolphin .../broker.py` `do_POST` `/launch`; the PCSX2 README states it
-  outright: *"`rom_name` is never read from the request"*).
+  outright: _"`rom_name` is never read from the request"_).
 
 ### Endpoints RomM 5.1 does **not** call
 
@@ -186,15 +186,15 @@ rom_name = rom.name or rom.fs_name_no_ext
 - `LIBRARY_BASE_PATH` = `${ROMM_BASE_PATH}/library`, and `ROMM_BASE_PATH`
   defaults to `/romm` → **`/romm/library`** (`backend/config/__init__.py:37`).
 - It is a **filesystem path, never a URL and never a download**. The comment in
-  the source is explicit: *"The emulator containers mount the RomM library at the
+  the source is explicit: _"The emulator containers mount the RomM library at the
   same path the backend uses (LIBRARY_BASE_PATH, /romm/library by default), so the
-  backend-side path is valid inside the broker container too."*
+  backend-side path is valid inside the broker container too."_
   **Mounting the library at the identical path in both containers is a hard
   requirement.**
 - The client never supplies a path; only `rom_id`. Visibility is re-checked
   (`assert_rom_visible`) before any broker call.
 - **Multi-file ROMs arrive as a directory.** `Rom.full_path` is
-  `fs_path/fs_name`, and for a multi-file ROM `fs_name` *is* the folder. So a
+  `fs_path/fs_name`, and for a multi-file ROM `fs_name` _is_ the folder. So a
   GDI+track set or a CUE+BIN set laid out one game per folder sends the broker a
   path that Flycast cannot boot directly. Every reference broker resolves this by
   looking inside: the folder itself first, then one level down, ranking candidates
@@ -203,8 +203,8 @@ rom_name = rom.name or rom.fs_name_no_ext
   `_pick_rom_file`, `_disc_number`). A folder with nothing bootable is a **422**
   carrying an `extensions` list — a distinct message from the 422 for a path that
   does not exist.
-- No archive extraction. The RomM docs say so directly: *"The broker launches
-  ROMs as direct files."*
+- No archive extraction. The RomM docs say so directly: _"The broker launches
+  ROMs as direct files."_
 - The reference brokers additionally confine `rom_path` under a `ROM_ROOT`
   (default `/romm/library`) and reject anything outside it with **400**
   (`_validate_rom_path`).
@@ -215,11 +215,11 @@ rom_name = rom.name or rom.fs_name_no_ext
 
 **Verified** — `_PLATFORM_CAPABILITIES` in `backend/endpoints/streaming.py`:
 
-| Platform slug | Emulator | Manual slots | Autosave slot |
-|---|---|---|---|
-| `ngc`, `wii`, `wiiu` | Dolphin | 1–7 | 8 |
-| `ps2` | PCSX2 | 1–9 | 10 |
-| `xbox` | xemu | 1–9 | 10 |
+| Platform slug        | Emulator | Manual slots | Autosave slot |
+| -------------------- | -------- | ------------ | ------------- |
+| `ngc`, `wii`, `wiiu` | Dolphin  | 1–7          | 8             |
+| `ps2`                | PCSX2    | 1–9          | 10            |
+| `xbox`               | xemu     | 1–9          | 10            |
 
 The table is the single source of truth: it gates RomM's own request validation
 (`_assert_valid_slot`, a clean 422 instead of a broker 502) and it is shipped to
@@ -230,7 +230,7 @@ second hard-coded copy.
 >
 > **There is no entry for `dc`, `naomi`, `naomi2` or `atomiswave`.** A platform
 > absent from `_PLATFORM_CAPABILITIES` gets `{"max_slots": 0, "has_autosave":
-> false, "autosave_slot": 0}`, which means, in RomM 5.1 as shipped:
+false, "autosave_slot": 0}`, which means, in RomM 5.1 as shipped:
 >
 > - `POST /streaming/sessions/dc/save-state` → **422**, before the broker is ever
 >   contacted (`_assert_valid_slot`, `allow_autosave=False`).
@@ -238,7 +238,7 @@ second hard-coded copy.
 > - The frontend shows **no save-slot UI** at all for the platform
 >   (`platformCapabilities()` in `frontend/src/stores/streaming.ts`).
 >
-> What *does* work for `dc` with an unmodified RomM 5.1: **launch, release,
+> What _does_ work for `dc` with an unmodified RomM 5.1: **launch, release,
 > volume, mute, and save-and-exit** — the last one because `save_and_exit_session`
 > never calls `_assert_valid_slot`; it passes `slot` (default **0**) straight
 > through, bounded only by the pydantic `ge=0, le=10`.
@@ -249,7 +249,7 @@ second hard-coded copy.
 ### Slot 0
 
 **Verified** — `SaveAndExitRequest.slot` defaults to **0**, and both the PCSX2 and
-Dolphin brokers treat `0` as *"use the configured default slot"*
+Dolphin brokers treat `0` as _"use the configured default slot"_
 (`# Slot 0 means "use the default slot", matching the pcsx2 broker`). The
 autosave slot is that default: `SAVE_SLOT=10` for PCSX2/xemu, `SAVE_SLOT=8` for
 Dolphin. So "Save & Exit" writes to the reserved autosave slot and the player's
@@ -258,7 +258,7 @@ manual slots are never clobbered.
 ### Save is asynchronous, exit is not
 
 - `POST /save-state` answers `{"status": "saving"}` the moment the keystroke or
-  IPC call is *dispatched*, and does the write-confirmation polling on a
+  IPC call is _dispatched_, and does the write-confirmation polling on a
   background thread. RomM's 5-second timeout makes anything else impossible.
 - `POST /save-and-exit` with `wait=true` **blocks** until the state file has
   landed and the emulator has been killed, inside RomM's
@@ -289,7 +289,7 @@ manual slots are never clobbered.
 - The sink Selkies actually streams is the null sink named **`output`**; its
   monitor `output.monitor` is what pcmflux captures. The base image creates
   `output` and `input` in `svc-selkies/run`, but only after waiting for
-  PulseAudio's *pid file*, which appears before the daemon accepts connections —
+  PulseAudio's _pid file_, which appears before the daemon accepts connections —
   a race the xemu mod fixes by creating the sinks itself and then claiming
   `/dev/shm/audio.lock`.
 
@@ -302,13 +302,17 @@ emulator is on its idle GUI. Using both would double-attenuate.
 **Verified** — `frontend/src/v2/views/Player/Stream.vue:547`.
 
 ```html
-<iframe :src="containerHost" allow="gamepad *; fullscreen *; autoplay *" allowfullscreen>
+<iframe
+  :src="containerHost"
+  allow="gamepad *; fullscreen *; autoplay *"
+  allowfullscreen
+></iframe>
 ```
 
 `host` is used **verbatim** as an iframe `src`. Consequences:
 
 - RomM served over HTTPS + `host` over HTTP = blocked mixed content. The docs are
-  blunt: *"HTTPS mandatory — Selkies WebRTC requires a secure context."* The
+  blunt: _"HTTPS mandatory — Selkies WebRTC requires a secure context."_ The
   linuxserver image serves plain HTTP on **3000** and TLS on **3001**.
 - `host` is what comes back in the claim response and what `GET /streaming/config`
   ships to the frontend, alongside `label` and `capabilities`.
@@ -327,8 +331,8 @@ streaming:
   enabled: true
   containers:
     - platform: dc
-      host: https://192.168.1.51:3001      # browser-facing, must be HTTPS
-      broker_host: http://flycast:8000     # server-side, optional
+      host: https://192.168.1.51:3001 # browser-facing, must be HTTPS
+      broker_host: http://flycast:8000 # server-side, optional
       label: Flycast
       # broker_secret: per-container override for STREAMING_BROKER_SECRET
 ```
@@ -343,17 +347,17 @@ RomM-side environment: `STREAMING_BROKER_SECRET`, `STREAMING_SAVE_TIMEOUT`
 **Verified** — `docker-flycast/Dockerfile`, `docker-flycast/readme-vars.yml`,
 `docker-baseimage-selkies/{Dockerfile,root/**}`.
 
-| Fact | Value |
-|---|---|
-| Base | `ghcr.io/linuxserver/baseimage-selkies:debiantrixie` → Debian 13 |
-| Flycast install | official AppImage, `--appimage-extract`ed to `/opt/flycast` |
-| Entry binary | **`/opt/flycast/AppRun`** |
-| Architectures | **`amd64` only** (`available_architectures` lists just `x86_64`) |
-| App user | `abc`, `PUID`/`PGID` default 1000, in the `sudo` group with `NOPASSWD: ALL` |
-| `HOME` | `/config` |
-| Ports | 3000 HTTP, 3001 HTTPS |
-| Required | `shm_size: 1gb` — the image's own docs call it out as needed for Flycast |
-| Notable env | `TITLE=Flycast`, **`PIXELFLUX_WAYLAND=true`** |
+| Fact            | Value                                                                       |
+| --------------- | --------------------------------------------------------------------------- |
+| Base            | `ghcr.io/linuxserver/baseimage-selkies:debiantrixie` → Debian 13            |
+| Flycast install | official AppImage, `--appimage-extract`ed to `/opt/flycast`                 |
+| Entry binary    | **`/opt/flycast/AppRun`**                                                   |
+| Architectures   | **`amd64` only** (`available_architectures` lists just `x86_64`)            |
+| App user        | `abc`, `PUID`/`PGID` default 1000, in the `sudo` group with `NOPASSWD: ALL` |
+| `HOME`          | `/config`                                                                   |
+| Ports           | 3000 HTTP, 3001 HTTPS                                                       |
+| Required        | `shm_size: 1gb` — the image's own docs call it out as needed for Flycast    |
+| Notable env     | `TITLE=Flycast`, **`PIXELFLUX_WAYLAND=true`**                               |
 
 ### ⚠ The flycast image runs Wayland, not X11
 
@@ -381,15 +385,15 @@ it or a native Wayland client depends on what SDL2 picks at runtime.
 
 What the base image gives us to work with, all verified in its `Dockerfile`:
 
-| Tool | Present | Path / note |
-|---|---|---|
-| `wtype` | ✅ | `/usr/bin/wtype`, built from source in a dedicated stage. Wayland virtual-keyboard injection — goes to the compositor's focused surface, which covers Xwayland clients too. |
-| `xdotool` | ✅ | package installed, but useless if Flycast is a native Wayland client |
-| `xdpyinfo`, `xset` | ✅ | via `x11-utils` |
-| `pactl` | ✅ | via `pulseaudio-utils` |
-| `xwayland` | ✅ | package installed; labwc built with it enabled |
-| `sudo` | ✅ | `abc` has `NOPASSWD: ALL`; can be revoked by `DISABLE_SUDO`/`HARDEN_DESKTOP` |
-| `python3` | ❔ | **UNVERIFIED.** The Dolphin mod apt-installs it at init, implying it is not guaranteed. Irrelevant for a Go broker. |
+| Tool               | Present | Path / note                                                                                                                                                                 |
+| ------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wtype`            | ✅      | `/usr/bin/wtype`, built from source in a dedicated stage. Wayland virtual-keyboard injection — goes to the compositor's focused surface, which covers Xwayland clients too. |
+| `xdotool`          | ✅      | package installed, but useless if Flycast is a native Wayland client                                                                                                        |
+| `xdpyinfo`, `xset` | ✅      | via `x11-utils`                                                                                                                                                             |
+| `pactl`            | ✅      | via `pulseaudio-utils`                                                                                                                                                      |
+| `xwayland`         | ✅      | package installed; labwc built with it enabled                                                                                                                              |
+| `sudo`             | ✅      | `abc` has `NOPASSWD: ALL`; can be revoked by `DISABLE_SUDO`/`HARDEN_DESKTOP`                                                                                                |
+| `python3`          | ❔      | **UNVERIFIED.** The Dolphin mod apt-installs it at init, implying it is not guaranteed. Irrelevant for a Go broker.                                                         |
 
 ### labwc has an IPC socket
 
@@ -398,7 +402,7 @@ socket at **`$XDG_RUNTIME_DIR/labwc.sock`** — i.e. `/config/.XDG/labwc.sock` �
 speaking one line-delimited command per connection:
 
 - `GET_WINDOWS` → JSON array of `{pid, x, y, width, height, title, app_id,
-  minimized, fullscreen, maximized, tiled, focused}`
+minimized, fullscreen, maximized, tiled, focused}`
 - `GET_WINDOW_BY_PID <pid>` → one such object, or `null`
 - `GET_FOCUSED_WINDOW` → same, or `null`
 
@@ -415,16 +419,16 @@ requirement.
 
 From `docker-baseimage-selkies/README.md` and `init-selkies-config/run`:
 
-| Variable | Effect |
-|---|---|
-| `SELKIES_MANUAL_WIDTH` / `SELKIES_MANUAL_HEIGHT` | lock the resolution; setting either activates manual mode |
-| `SELKIES_IS_MANUAL_RESOLUTION_MODE` | manual mode at the default 1024x768 |
-| `PASSWORD` / `CUSTOM_USER` | HTTP basic auth; **unset `PASSWORD` = no auth**, which is what an iframe embed wants |
-| `SELKIES_ENCODER`, `SELKIES_USE_CPU` | `x264enc,jpeg` default; the PCSX2 README documents a VAAPI decoder crash loop that `SELKIES_USE_CPU=true` works around |
-| `NO_DECOR`, `NO_FULL` | window decorations / auto-maximise |
-| `RESTART_APP` | watchdog relaunches the autostart app and locks the autostart file `root:abc 0550` — **conflicts with a broker that owns the process lifecycle** |
-| `HARDEN_DESKTOP` / `HARDEN_OPENBOX` | bundles; `HARDEN_OPENBOX` implies `RESTART_APP=true`, and `HARDEN_DESKTOP` implies `DISABLE_SUDO=true` |
-| `DRINODE` | pick a specific render node |
+| Variable                                         | Effect                                                                                                                                           |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SELKIES_MANUAL_WIDTH` / `SELKIES_MANUAL_HEIGHT` | lock the resolution; setting either activates manual mode                                                                                        |
+| `SELKIES_IS_MANUAL_RESOLUTION_MODE`              | manual mode at the default 1024x768                                                                                                              |
+| `PASSWORD` / `CUSTOM_USER`                       | HTTP basic auth; **unset `PASSWORD` = no auth**, which is what an iframe embed wants                                                             |
+| `SELKIES_ENCODER`, `SELKIES_USE_CPU`             | `x264enc,jpeg` default; the PCSX2 README documents a VAAPI decoder crash loop that `SELKIES_USE_CPU=true` works around                           |
+| `NO_DECOR`, `NO_FULL`                            | window decorations / auto-maximise                                                                                                               |
+| `RESTART_APP`                                    | watchdog relaunches the autostart app and locks the autostart file `root:abc 0550` — **conflicts with a broker that owns the process lifecycle** |
+| `HARDEN_DESKTOP` / `HARDEN_OPENBOX`              | bundles; `HARDEN_OPENBOX` implies `RESTART_APP=true`, and `HARDEN_DESKTOP` implies `DISABLE_SUDO=true`                                           |
+| `DRINODE`                                        | pick a specific render node                                                                                                                      |
 
 ### How `DOCKER_MODS` applies a mod — and its hard constraint
 
@@ -444,7 +448,7 @@ as `S6_STAGE2_HOOK=/docker-mods`.
 > fetched; anything in a second layer silently does not exist. In Nix terms this
 > rules out `dockerTools.buildLayeredImage` / `streamLayeredImage` and points at
 > `dockerTools.buildImage` with no `fromImage`, which produces exactly one layer.
-> Multi-arch *is* supported, via a proper OCI index.
+> Multi-arch _is_ supported, via a proper OCI index.
 
 s6-overlay **v3** only: `cont-init.d` and `services.d` from v2 are actively
 deleted. The mod ships `/etc/s6-overlay/s6-rc.d/<name>/{type,run,up,finish,
@@ -474,7 +478,7 @@ Two ordering lessons the PCSX2 README states explicitly and that carry over:
   before that service, which means adding an edge into
   `init-services/dependencies.d/`. Patch it later and the file on disk changes
   while the running process does not — a silent failure.
-- Slow or networked init (apt) belongs in a *separate* oneshot that only
+- Slow or networked init (apt) belongs in a _separate_ oneshot that only
   `svc-broker` depends on, so a registry timeout cannot stall the stream.
 
 The reference mods are published from a two-line `Dockerfile` (`FROM scratch;
@@ -510,7 +514,7 @@ flycast [-config section:key=value,...] [<rom path>]
 
 `shell/linux/make-appimage.sh` generates `AppRun` as a three-line `/bin/sh`
 script that ends in `exec "$APPDIR/usr/bin/flycast" "$@"`. Because it `exec`s,
-the shell process is *replaced*: the PID the broker spawns **is** the Flycast
+the shell process is _replaced_: the PID the broker spawns **is** the Flycast
 process, so ordinary `Popen` + `wait()` supervision works with no wrapper-PID
 indirection, and `-config ...` arguments pass straight through. The script may
 prepend to `LD_LIBRARY_PATH` and `LD_PRELOAD` via `checkrt`, preserving anything
@@ -521,15 +525,15 @@ interposer survives.
 
 `core/linux-dist/main.cpp` — with `HOME=/config` inside the container:
 
-| What | Path |
-|---|---|
-| Config dir | `$XDG_CONFIG_HOME` or `$HOME/.config` → **`/config/.config/flycast/`** |
-| Data dir | `$XDG_DATA_HOME` or `$HOME/.local/share` → **`/config/.local/share/flycast/`** |
-| Main config file | `emu.cfg` in the config dir |
-| Input mappings | `mappings/<name>.cfg` under the config dir |
-| Lua script | `get_readonly_config_path(LuaFileName)`, default `flycast.lua` |
-| Savestates | `get_writable_data_path(...)` unless `Dreamcast.SavestatePath` is set |
-| BIOS | searched under `Dreamcast.BiosPath`, then data dirs (`hostfs::findFlash`) |
+| What             | Path                                                                           |
+| ---------------- | ------------------------------------------------------------------------------ |
+| Config dir       | `$XDG_CONFIG_HOME` or `$HOME/.config` → **`/config/.config/flycast/`**         |
+| Data dir         | `$XDG_DATA_HOME` or `$HOME/.local/share` → **`/config/.local/share/flycast/`** |
+| Main config file | `emu.cfg` in the config dir                                                    |
+| Input mappings   | `mappings/<name>.cfg` under the config dir                                     |
+| Lua script       | `get_readonly_config_path(LuaFileName)`, default `flycast.lua`                 |
+| Savestates       | `get_writable_data_path(...)` unless `Dreamcast.SavestatePath` is set          |
+| BIOS             | searched under `Dreamcast.BiosPath`, then data dirs (`hostfs::findFlash`)      |
 
 `emu.cfg` uses a `[config]` section with dotted keys — `Option`'s default section
 is literally `"config"` (`core/cfg/option.h:107`), so `Dreamcast.SavestateSlot`
@@ -538,15 +542,15 @@ lives at `[config] Dreamcast.SavestateSlot`. On the command line that is
 
 Relevant option keys, all verified in `core/cfg/option.cpp`:
 
-| Key | Meaning |
-|---|---|
+| Key                       | Meaning                                                                          |
+| ------------------------- | -------------------------------------------------------------------------------- |
 | `Dreamcast.SavestateSlot` | current slot, **0–9** (`(slot + 10 + step) % 10`), shown in the UI as "Slot N+1" |
-| `Dreamcast.AutoSaveState` | save to the current slot when the game is unloaded |
-| `Dreamcast.AutoLoadState` | load the current slot when a game starts |
-| `Dreamcast.SavestatePath` | list of directories to write savestates to |
-| `Dreamcast.BiosPath` | list of directories to search for BIOS |
-| `Dreamcast.ContentPath` | list of game directories for the built-in game list |
-| `LuaFileName` | script filename, default `flycast.lua` |
+| `Dreamcast.AutoSaveState` | save to the current slot when the game is unloaded                               |
+| `Dreamcast.AutoLoadState` | load the current slot when a game starts                                         |
+| `Dreamcast.SavestatePath` | list of directories to write savestates to                                       |
+| `Dreamcast.BiosPath`      | list of directories to search for BIOS                                           |
+| `Dreamcast.ContentPath`   | list of game directories for the built-in game list                              |
+| `LuaFileName`             | script filename, default `flycast.lua`                                           |
 
 ### Savestate filenames
 
@@ -611,13 +615,13 @@ that polls a command file or FIFO on each frame and calls `saveState(n)` /
 `loadState(n)` / `exit()` directly, writing an acknowledgement back for the
 broker to read. It sidesteps the whole Wayland-vs-X11 input-injection question,
 it addresses slots by number instead of cycling a selector, and it is the only
-mechanism here that can report *"the save actually happened"* from inside the
+mechanism here that can report _"the save actually happened"_ from inside the
 emulator rather than by watching the filesystem.
 
 `AutoSaveState` + `AutoLoadState` are a second, cruder lever: with both on,
 Flycast saves to the current slot on unload and reloads it on start, which is
 "Save & Exit" and "resume" for free — at the cost of overwriting whatever slot is
-current on *every* game exit.
+current on _every_ game exit.
 
 ### Idle behaviour
 
@@ -651,11 +655,11 @@ README states the RomM version requirement.
 
 Geometry, matching PCSX2/xemu so RomM's existing UI needs no special case:
 
-| RomM slot | Meaning | Flycast `SavestateSlot` index | State file |
-|---|---|---|---|
-| 1–9 | manual | 0–8 | `<basename>_1.state` … `<basename>_8.state`, and `<basename>.state` for index 0 |
-| 10 | autosave, reserved for Save & Exit | 9 | `<basename>_9.state` |
-| 0 (on `/save-and-exit`) | alias for the autosave slot | 9 | `<basename>_9.state` |
+| RomM slot               | Meaning                            | Flycast `SavestateSlot` index | State file                                                                      |
+| ----------------------- | ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------- |
+| 1–9                     | manual                             | 0–8                           | `<basename>_1.state` … `<basename>_8.state`, and `<basename>.state` for index 0 |
+| 10                      | autosave, reserved for Save & Exit | 9                             | `<basename>_9.state`                                                            |
+| 0 (on `/save-and-exit`) | alias for the autosave slot        | 9                             | `<basename>_9.state`                                                            |
 
 So `flycast_index = romm_slot - 1`, and Flycast's ten slots (`(n + 10 + step) %
 10`, verified in `core/ui/gui.cpp:520`) map exactly onto RomM's 1–10 with none
@@ -700,12 +704,12 @@ emulator rather than by inferring it from stat() calls.
 
 Protocol, deliberately minimal, in `${FLYCAST_CONFIG_DIR}/romm-broker/`:
 
-| File | Written by | Contents |
-|---|---|---|
-| `ready` | Lua, at script load | one line, the protocol version — proves the script loaded |
+| File      | Written by                              | Contents                                                    |
+| --------- | --------------------------------------- | ----------------------------------------------------------- |
+| `ready`   | Lua, at script load                     | one line, the protocol version — proves the script loaded   |
 | `command` | broker, atomically (`write` + `rename`) | `<seq> <verb> [arg]` — `save N`, `load N`, `slot N`, `exit` |
-| `ack` | Lua, after executing | `<seq> ok` or `<seq> err <reason>` |
-| `state` | Lua, on `start` / `terminate` | `running` / `stopped` |
+| `ack`     | Lua, after executing                    | `<seq> ok` or `<seq> err <reason>`                          |
+| `state`   | Lua, on `start` / `terminate`           | `running` / `stopped`                                       |
 
 The poll runs in the **`overlay`** callback, not `vblank`. `lua::overlay()` is
 invoked from `gui_draw_osd()` on the render/UI thread
