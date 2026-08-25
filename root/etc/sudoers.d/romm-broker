@@ -1,0 +1,4 @@
+# The broker runs as root (s6 starts it that way) but Flycast, pactl and the
+# PulseAudio socket all belong to abc. Everything it spawns goes through
+# `sudo -u abc env ...`, and this is the only rule that needs to allow.
+root ALL=(abc) NOPASSWD: /usr/bin/env
