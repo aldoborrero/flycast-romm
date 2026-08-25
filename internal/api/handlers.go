@@ -134,7 +134,12 @@ func (s *Server) refuseResolve(w http.ResponseWriter, r *http.Request, raw strin
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctl.Kill(r.Context()); err != nil {
+	// Detached: once the kill has started, a client that hangs up must not
+	// leave the emulator half-stopped.
+	ctx, cancel := detach(r.Context())
+	defer cancel()
+
+	if err := s.ctl.Kill(ctx); err != nil {
 		s.refuse(w, r, http.StatusInternalServerError, "could not stop flycast", err.Error())
 		return
 	}
@@ -238,7 +243,15 @@ func (s *Server) handleSaveAndExit(w http.ResponseWriter, r *http.Request) {
 
 	// RomM allows STREAMING_SAVE_TIMEOUT (45s by default) here, which is the
 	// budget the write confirmation and the kill share.
-	saved := s.saveAndExit(r.Context(), romPath, slot, flySlot)
+	//
+	// The context is detached from the request. A client that hangs up
+	// mid-save would otherwise cancel the write confirmation and then the
+	// SIGKILL fallback, leaving a truncated state and a live emulator behind
+	// a session the handler has already cleared.
+	ctx, cancel := detach(r.Context())
+	defer cancel()
+
+	saved := s.saveAndExit(ctx, romPath, slot, flySlot)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "saved": saved, "slot": slot})
 }
 
@@ -319,6 +332,13 @@ func (s *Server) handleMute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "mute": state})
+}
+
+// detach keeps a request's values but drops its cancellation, for work that
+// must finish even if the caller goes away. It carries the same ceiling as
+// background work so a wedged emulator cannot hold a goroutine forever.
+func detach(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), backgroundTimeout)
 }
 
 // background runs work that must outlive the request. The request context is
