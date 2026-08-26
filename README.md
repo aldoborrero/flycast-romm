@@ -175,23 +175,24 @@ before the first launch rather than after it fails.
 `BROKER_SECRET` is the only one that really matters. Everything else has a
 working default.
 
-| Variable                                    | Default                        | What it does                                                                                                         |
-| ------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `BROKER_SECRET` / `STREAMING_BROKER_SECRET` | _(none)_                       | Shared secret, sent by RomM as `X-Broker-Secret`. Unset means every request is accepted — see [Security](#security). |
-| `BROKER_PORT`                               | `8000`                         | Port the broker listens on. RomM assumes 8000 when `broker_host` omits one.                                          |
-| `ROM_ROOT`                                  | `/romm/library`                | Where the library is mounted. A `rom_path` outside this is refused.                                                  |
-| `SAVE_SLOT`                                 | `10`                           | Slot `/save-and-exit` uses when RomM sends 0. Ten as the autosave slot leaves 1–9 for the player.                    |
-| `LAUNCH_WAIT`                               | `8s`                           | How long `/launch` waits for the emulator to report running. Must stay under RomM's fixed 10s timeout.               |
-| `SAVE_WAIT`                                 | `20s`                          | How long to wait for a savestate write to settle before giving up. Only the failure path pays it.                    |
-| `LUA_WAIT`                                  | `10s`                          | How long to wait for the Lua script to acknowledge a command.                                                        |
-| `QUIT_WAIT`                                 | `6s`                           | Grace between SIGTERM and SIGKILL.                                                                                   |
-| `DISPLAY_WAIT`                              | `30s`                          | How long to wait for the compositor at startup before launching anyway.                                              |
-| `FLYCAST_BIN`                               | `/opt/flycast/AppRun`          | The emulator. `AppRun` `exec`s the real binary, so this PID is Flycast's.                                            |
-| `FLYCAST_CONFIG_DIR`                        | `/config/.config/flycast`      | Where `emu.cfg`, the Lua script and the command channel live.                                                        |
-| `FLYCAST_DATA_DIR`                          | `/config/.local/share/flycast` | Where BIOS, VMU images and savestates live.                                                                          |
-| `SSTATE_DIR`                                | _(the data dir)_               | Override only if `Dreamcast.SavestatePath` is set in `emu.cfg`.                                                      |
-| `BROKER_LOG_LEVEL`                          | `INFO`                         | `DEBUG`, `INFO`, `WARN`, `ERROR`.                                                                                    |
-| `PUID` / `PGID`                             | `1000`                         | Standard LinuxServer UID/GID. Also owns the files the broker creates for Flycast.                                    |
+| Variable                                    | Default                         | What it does                                                                                                                                      |
+| ------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BROKER_SECRET` / `STREAMING_BROKER_SECRET` | _(none)_                        | Shared secret, sent by RomM as `X-Broker-Secret`. Unset means every request is accepted — see [Security](#security).                              |
+| `BROKER_PORT`                               | `8000`                          | Port the broker listens on. RomM assumes 8000 when `broker_host` omits one.                                                                       |
+| `ROM_ROOT`                                  | `/romm/library`                 | Where the library is mounted. A `rom_path` outside this is refused.                                                                               |
+| `SAVE_SLOT`                                 | `10`                            | Slot `/save-and-exit` uses when RomM sends 0. Ten as the autosave slot leaves 1–9 for the player.                                                 |
+| `LAUNCH_WAIT`                               | `8s`                            | How long `/launch` waits for the emulator to report running. Must stay under RomM's fixed 10s timeout.                                            |
+| `SAVE_WAIT`                                 | `20s`                           | How long to wait for a savestate write to settle before giving up. Only the failure path pays it.                                                 |
+| `LUA_WAIT`                                  | `10s`                           | How long to wait for the Lua script to acknowledge a command.                                                                                     |
+| `QUIT_WAIT`                                 | `6s`                            | Grace between SIGTERM and SIGKILL.                                                                                                                |
+| `DISPLAY_WAIT`                              | `30s`                           | How long to wait for the compositor at startup before launching anyway.                                                                           |
+| `FLYCAST_BIN`                               | `/opt/flycast/AppRun`           | The emulator. `AppRun` `exec`s the real binary, so this PID is Flycast's.                                                                         |
+| `FLYCAST_CONFIG_DIR`                        | `/config/.config/flycast`       | Where `emu.cfg`, the Lua script and the command channel live.                                                                                     |
+| `FLYCAST_DATA_DIR`                          | `/config/.local/share/flycast`  | Where BIOS, VMU images and savestates live.                                                                                                       |
+| `SSTATE_DIR`                                | _(the data dir)_                | Override only if `Dreamcast.SavestatePath` is set in `emu.cfg`.                                                                                   |
+| `FLYCAST_PIDFILE`                           | `/run/flycast-romm/flycast.pid` | Records the emulator's PID, so a broker restarted after a crash stops the emulator its predecessor left running instead of starting a second one. |
+| `BROKER_LOG_LEVEL`                          | `INFO`                          | `DEBUG`, `INFO`, `WARN`, `ERROR`.                                                                                                                 |
+| `PUID` / `PGID`                             | _(abc's ids, else 1000)_        | Standard LinuxServer UID/GID. Also owns the files the broker creates for Flycast; unset, the mod uses the `abc` user's real ids.                  |
 
 Durations accept both a bare number of seconds (`20`) and Go syntax (`20s`,
 `1m30s`).

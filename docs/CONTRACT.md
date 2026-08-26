@@ -269,6 +269,15 @@ manual slots are never clobbered.
   `409 {"error": "no game is running"}` when no ROM is loaded;
   `409 {"error": "save already in progress"}` for a second save, **and for a load
   during a save** — a load mid-save races the write it would overwrite.
+- This broker extends those guards to the whole emulator lifecycle (see D8).
+  Beyond the reference set: `DELETE /launch` is refused with
+  `409 {"error": "save already in progress"}` while a save is writing — killing
+  the emulator mid-write truncates the state, and the truncated file then reads
+  back as a clean, stable save — and launch, stop, save and load refuse each
+  other with `409 {"error": "launch in progress"}` or
+  `409 {"error": "stop in progress"}` rather than interleaving kill and spawn.
+  RomM's own flows never overlap these calls, so the refusals only surface for
+  concurrent or retried requests.
 
 ## 6. Volume and mute
 
@@ -790,6 +799,53 @@ one container.
 Flycast container has been exercised here. Everything in `docs/DEPLOY.md` that
 requires a running emulator is recorded as **not executed**, with the exact
 commands to run it on a real host.
+
+### D8 — The lifecycle is one state machine: launch, stop and save exclude each other
+
+Added after a review of the first implementation found three destructive
+interleavings between the lifecycle calls. The session manager holds one claim
+per operation, and every path that kills, spawns or writes takes one first:
+
+- **A stop claims the session like a launch does.** A `DELETE /launch` racing
+  an in-flight `/save-state` used to SIGTERM the emulator mid-write; the
+  truncated file then stopped growing, and the write confirmation read it back
+  as success. It is now refused with the same 409 every other save conflict
+  gets. The clean-shutdown path already waited for in-flight saves; this closes
+  the API path that did not.
+- **Save claims are numbered.** The claim of a save abandoned to a crash is
+  released when the exit monitor clears the session, and the abandoned
+  goroutine's own deferred release — which can fire up to `SAVE_WAIT` later —
+  presents a stale token and becomes a no-op instead of freeing the claim a
+  newer save holds by then. `/save-and-exit` re-checks its token between the
+  save and the kill, so after a mid-save crash it leaves whatever newer session
+  owns the emulator alone instead of killing it.
+- **The idle relaunch is gated.** The return to the game list after a stop, a
+  save-and-exit or a crash runs in the background, and re-checks under the
+  launch lock that the session is still idle — so a menu never replaces a game
+  that launched while the relaunch was queued.
+- **A session record cannot outlive its process.** A game that boots and dies
+  inside the launch window is invisible to the monitor's relaunch (it defers
+  to the launch's claim), so `/launch` checks the process survived before
+  recording the session — and answers 500, which makes RomM release its claim
+  on a ROM that crashes the emulator. As a second layer, `/status` and
+  `/health` derive `active` from the live process at read time, the way the
+  pcsx2 broker computes it, instead of trusting the stored record.
+- **The crash relaunch is a limited loop, not a single strike.** An unexpected
+  exit relaunches the game list after a short pause (5 s when the process died
+  within five seconds of launching, 1 s otherwise), and three consecutive
+  rapid deaths make the monitor give up — the same counter, pacing and limit
+  as the pcsx2 broker. Giving up is visible: `/status` reports
+  `relaunch_abandoned: true` (while `/health` stays an unconditional 200 for
+  container healthchecks, as in every sibling broker), and an explicit
+  `POST /launch` resets the limiter and recovers.
+- **A leftover emulator is reaped at startup.** Flycast is spawned with
+  `setsid` and survives an unclean broker death, and s6 restarts only the
+  broker — which would then boot a second emulator on top of the orphan. The
+  spawned group leader's PID is recorded in `FLYCAST_PIDFILE` (default
+  `/run/flycast-romm/flycast.pid`, on tmpfs so a fresh container never
+  inherits it); at startup the broker terminates a live leftover found there,
+  but only after `/proc/<pid>/cmdline` matches `FLYCAST_BIN`, so a recycled
+  PID belonging to an innocent process is left alone.
 
 ## 11. Known unknowns (not blocking, but unverified)
 
