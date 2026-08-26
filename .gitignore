@@ -2,3 +2,6 @@
 /result-*
 .direnv/
 .pre-commit-config.yaml
+
+# Local reference checkouts (flycast, sibling brokers), never repo content.
+.claude/code/
