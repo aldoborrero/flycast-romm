@@ -28,10 +28,11 @@ var (
 // .bin is deliberately absent: it is a CUE track, never a boot target.
 var Extensions = []string{".chd", ".gdi", ".cdi", ".cue", ".zip", ".7z", ".elf"}
 
-// playlistExt is a multi-disc playlist. Flycast has no playlist loader — it is
-// deliberately absent from Extensions — so a .m3u is resolved to the first disc
-// it names rather than handed to the emulator, which would reject it as an
-// unknown disk format. Switching discs is a runtime action inside Flycast, not
+// playlistExt is a multi-disc playlist. The standalone Flycast the broker
+// drives has no playlist loader (only its libretro core does), so .m3u is
+// deliberately absent from Extensions: a .m3u is resolved to the first disc it
+// names rather than handed to the emulator, which would reject it as an unknown
+// disk format. Switching discs is a runtime action inside Flycast, not
 // something the .m3u drives.
 const playlistExt = ".m3u"
 
@@ -53,6 +54,15 @@ var discRe = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:disc|disk|cd)[\s._-]*(\d+
 // as a plain file and is just as unbootable, so it resolves to the first disc
 // it names.
 func ResolveROM(root, raw string) (string, error) {
+	return resolveROM(root, raw, 0)
+}
+
+// resolveROM is ResolveROM with a recursion depth. depth > 0 means we arrived
+// from a .m3u entry; a second playlist reached at that point is refused rather
+// than followed. Because this check runs after EvalSymlinks below, it bounds
+// the recursion on the symlink-resolved path — a disc entry that is a symlink
+// back to a playlist is caught here, which a check on the literal text is not.
+func resolveROM(root, raw string, depth int) (string, error) {
 	path, err := filepath.Abs(strings.TrimSpace(raw))
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", ErrOutsideRoot, raw)
@@ -75,7 +85,10 @@ func ResolveROM(root, raw string) (string, error) {
 	}
 	if !info.IsDir() {
 		if isPlaylist(path) {
-			return resolvePlaylist(root, path)
+			if depth > 0 {
+				return "", fmt.Errorf("%w: playlist references another playlist", ErrNoBootable)
+			}
+			return resolvePlaylist(root, path, depth)
 		}
 		if !supported(path) {
 			return "", fmt.Errorf("%w: unsupported extension %q", ErrNoBootable, filepath.Ext(path))
@@ -96,10 +109,10 @@ func isPlaylist(path string) bool {
 
 // resolvePlaylist reads a .m3u and returns the first disc it names, resolved
 // relative to the playlist's own directory. The disc goes back through
-// ResolveROM so it inherits the same containment and symlink checks as any
-// direct launch; a playlist that names another playlist is refused rather than
-// followed, which also stops it looping back on itself.
-func resolvePlaylist(root, m3u string) (string, error) {
+// resolveROM so it inherits the same containment and symlink checks as any
+// direct launch, and the depth bound there refuses a playlist that resolves to
+// another playlist rather than following it.
+func resolvePlaylist(root, m3u string, depth int) (string, error) {
 	f, err := os.Open(m3u)
 	if err != nil {
 		return "", ErrNotFound
@@ -109,25 +122,36 @@ func resolvePlaylist(root, m3u string) (string, error) {
 	entry := ""
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		// Strip a UTF-8 BOM (editors leave one on the first line) and the
+		// surrounding quotes some playlists wrap paths in, as Flycast's own
+		// m3u reader does.
+		line := strings.TrimPrefix(strings.TrimSpace(scanner.Text()), "\ufeff")
+		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		entry = line
+		entry = strings.Trim(line, `"`)
 		break
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("%w: unreadable playlist: %v", ErrNoBootable, err)
 	}
 	if entry == "" {
 		return "", ErrNoBootable
-	}
-	if isPlaylist(entry) {
-		return "", fmt.Errorf("%w: playlist names another playlist %q", ErrNoBootable, entry)
 	}
 
 	disc := entry
 	if !filepath.IsAbs(disc) {
 		disc = filepath.Join(filepath.Dir(m3u), disc)
 	}
-	return ResolveROM(root, disc)
+	resolved, err := resolveROM(root, disc, depth+1)
+	if err != nil {
+		// Name the disc, not the playlist: the .m3u exists, its entry is what
+		// failed to resolve. The error class is preserved so the handler still
+		// maps it the same way.
+		return "", fmt.Errorf("playlist entry %q: %w", entry, err)
+	}
+	return resolved, nil
 }
 
 type candidate struct {

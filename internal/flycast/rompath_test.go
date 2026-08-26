@@ -277,3 +277,106 @@ func TestResolvePlaylistRejectsNestedPlaylist(t *testing.T) {
 		t.Fatalf("ResolveROM = %v, want ErrNoBootable", err)
 	}
 }
+
+// An editor-authored playlist can carry a UTF-8 BOM on its first line, which
+// is not whitespace and would otherwise stick to the first disc's name.
+func TestResolvePlaylistStripsBOM(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	write(t, filepath.Join(dir, "D2 (Disc 1).chd"))
+	m3u := filepath.Join(dir, "D2.m3u")
+	if err := os.WriteFile(m3u, []byte("\ufeffD2 (Disc 1).chd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveROM(root, m3u)
+	if err != nil {
+		t.Fatalf("ResolveROM: %v", err)
+	}
+	if filepath.Base(got) != "D2 (Disc 1).chd" {
+		t.Fatalf("ResolveROM = %q, want the first disc", got)
+	}
+}
+
+// The playlist decides the boot disc by order: the first entry wins even when
+// it is not disc 1. (A folder, by contrast, sorts by disc number.)
+func TestResolvePlaylistFirstEntryWins(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	write(t, filepath.Join(dir, "Game (Disc 1).chd"))
+	write(t, filepath.Join(dir, "Game (Disc 2).chd"))
+	m3u := filepath.Join(dir, "Game.m3u")
+	if err := os.WriteFile(m3u, []byte("Game (Disc 2).chd\nGame (Disc 1).chd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveROM(root, m3u)
+	if err != nil {
+		t.Fatalf("ResolveROM: %v", err)
+	}
+	if filepath.Base(got) != "Game (Disc 2).chd" {
+		t.Fatalf("ResolveROM = %q, want the first listed disc", got)
+	}
+}
+
+// An absolute entry that stays within the library is accepted (the escaping
+// case is covered separately).
+func TestResolvePlaylistAbsoluteEntryWithinRoot(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	disc := write(t, filepath.Join(dir, "Game.chd"))
+	m3u := filepath.Join(dir, "Game.m3u")
+	if err := os.WriteFile(m3u, []byte(disc+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveROM(root, m3u)
+	if err != nil {
+		t.Fatalf("ResolveROM: %v", err)
+	}
+	if filepath.Base(got) != "Game.chd" {
+		t.Fatalf("ResolveROM = %q, want the disc", got)
+	}
+}
+
+// A relative entry may point into a subdirectory beside the playlist.
+func TestResolvePlaylistSubdirEntry(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	write(t, filepath.Join(dir, "discs", "Game (Disc 1).chd"))
+	m3u := filepath.Join(dir, "Game.m3u")
+	if err := os.WriteFile(m3u, []byte("discs/Game (Disc 1).chd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveROM(root, m3u)
+	if err != nil {
+		t.Fatalf("ResolveROM: %v", err)
+	}
+	if filepath.Base(got) != "Game (Disc 1).chd" {
+		t.Fatalf("ResolveROM = %q, want the nested disc", got)
+	}
+}
+
+// A disc entry that is a symlink back to a playlist must not re-enter playlist
+// resolution: the loop bound is on the symlink-resolved path, not the literal
+// text, so it cannot be evaded with an innocent-looking .chd name. Without the
+// bound this recurses until it exhausts the process's file descriptors.
+func TestResolvePlaylistRejectsSymlinkLoop(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m3u := filepath.Join(dir, "outer.m3u")
+	if err := os.WriteFile(m3u, []byte("self.chd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(m3u, filepath.Join(dir, "self.chd")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := ResolveROM(root, m3u); !errors.Is(err, ErrNoBootable) {
+		t.Fatalf("ResolveROM = %v, want ErrNoBootable", err)
+	}
+}
