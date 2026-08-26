@@ -88,13 +88,13 @@ services:
       - PGID=1000
       - DOCKER_MODS=ghcr.io/aldoborrero/flycast-romm-integration:latest
       - BROKER_SECRET=your_secret_here
-      - ROM_ROOT=/romm/library
+      - ROM_ROOT=/romm/library/roms
       - SELKIES_IS_MANUAL_RESOLUTION_MODE=true
       - SELKIES_MANUAL_WIDTH=1280
       - SELKIES_MANUAL_HEIGHT=960
     volumes:
       - ./flycast-config:/config
-      - /srv/romm/library:/romm/library:ro # the same path RomM mounts
+      - /srv/romm/library/roms:/romm/library/roms:ro # the same path RomM mounts
     devices:
       - /dev/dri:/dev/dri
     shm_size: 1gb
@@ -143,7 +143,7 @@ Three things are easy to get wrong:
 - **The ROM volume must be mounted at the same path in both containers.** RomM
   derives an absolute path from its own `LIBRARY_BASE_PATH` and assumes this
   container sees it identically. If RomM sees
-  `/romm/library/dc/game.chd`, Flycast must too, or every launch 422s.
+  `/romm/library/roms/dc/game.chd`, Flycast must too, or every launch 422s.
 - **`broker_host` needs a scheme.** RomM rejects a bare `host:port`, silently
   skipping the container. Omit `broker_host` entirely and RomM derives it from
   `host` with the port swapped to 8000.
@@ -182,7 +182,7 @@ working default.
 | ------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BROKER_SECRET` / `STREAMING_BROKER_SECRET` | _(none)_                        | Shared secret, sent by RomM as `X-Broker-Secret`. Unset means every request is accepted — see [Security](#security).                              |
 | `BROKER_PORT`                               | `8000`                          | Port the broker listens on. RomM assumes 8000 when `broker_host` omits one.                                                                       |
-| `ROM_ROOT`                                  | `/romm/library`                 | Where the library is mounted. A `rom_path` outside this is refused.                                                                               |
+| `ROM_ROOT`                                  | `/romm/library/roms`            | The roms directory, mounted at the same path RomM sends. A `rom_path` outside this is refused.                                                    |
 | `SAVE_SLOT`                                 | `10`                            | Slot `/save-and-exit` uses when RomM sends 0. Ten as the autosave slot leaves 1–9 for the player.                                                 |
 | `LAUNCH_WAIT`                               | `8s`                            | How long `/launch` waits for the emulator to report running. Must stay under RomM's fixed 10s timeout.                                            |
 | `SAVE_WAIT`                                 | `20s`                           | How long to wait for a savestate write to settle before giving up. Only the failure path pays it.                                                 |

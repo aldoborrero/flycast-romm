@@ -185,6 +185,11 @@ rom_name = rom.name or rom.fs_name_no_ext
 
 - `LIBRARY_BASE_PATH` = `${ROMM_BASE_PATH}/library`, and `ROMM_BASE_PATH`
   defaults to `/romm` → **`/romm/library`** (`backend/config/__init__.py:37`).
+- `rom.full_path` is `fs_path/fs_name`, and on RomM 3.0+ `fs_path` is
+  `roms/<platform>` (verified against a RomM 5.2.0 library: `fs_path = roms/dc`).
+  So the path the broker actually receives is
+  **`/romm/library/roms/<platform>/<file>`**, and `ROM_ROOT` is that roms
+  directory — not the library base.
 - It is a **filesystem path, never a URL and never a download**. The comment in
   the source is explicit: _"The emulator containers mount the RomM library at the
   same path the backend uses (LIBRARY_BASE_PATH, /romm/library by default), so the
@@ -203,11 +208,16 @@ rom_name = rom.name or rom.fs_name_no_ext
   `_pick_rom_file`, `_disc_number`). A folder with nothing bootable is a **422**
   carrying an `extensions` list — a distinct message from the 422 for a path that
   does not exist.
+- **Loose-file multi-disc libraries send a file, not a folder.** Where each disc
+  `.chd` and the `.m3u` playlist are separate ROMs (verified on RomM 5.2.0),
+  launching the `.m3u` sends its path directly. Flycast cannot boot a playlist,
+  so this broker resolves a `.m3u` to the first disc it names.
 - No archive extraction. The RomM docs say so directly: _"The broker launches
   ROMs as direct files."_
 - The reference brokers additionally confine `rom_path` under a `ROM_ROOT`
   (default `/romm/library`) and reject anything outside it with **400**
-  (`_validate_rom_path`).
+  (`_validate_rom_path`). This broker does the same, defaulting `ROM_ROOT` to
+  the roms directory `/romm/library/roms`.
 
 ## 5. Save-state semantics
 

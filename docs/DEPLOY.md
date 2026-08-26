@@ -74,12 +74,12 @@ The startup sequence to look for:
 ```
 [flycast-broker-mod] Disabled the labwc autostart.
 [flycast-broker-mod] Installed romm-broker.lua into /config/.config/flycast.
-[flycast-broker-mod] Ready. ROM_ROOT=/romm/library, broker port 8000.
+[flycast-broker-mod] Ready. ROM_ROOT=/romm/library/roms, broker port 8000.
 ... level=INFO msg="flycast romm broker starting" version=...
 ... level=INFO msg="shared secret auth enabled"
 ... level=INFO msg="display is up" display=wayland-0
 ... level=INFO msg="launching flycast" rom="game list"
-... level=INFO msg="broker listening" port=8000 rom_root=/romm/library
+... level=INFO msg="broker listening" port=8000 rom_root=/romm/library/roms
 ```
 
 If `lua_ready` is false in `/health`, check in this order:

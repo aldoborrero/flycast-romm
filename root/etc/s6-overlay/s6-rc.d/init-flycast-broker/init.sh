@@ -82,5 +82,5 @@ if [ -z "${BROKER_SECRET:-}${STREAMING_BROKER_SECRET:-}" ]; then
   say "WARNING: no BROKER_SECRET set. The broker runs as root and will accept every request."
 fi
 
-say "Ready. ROM_ROOT=${ROM_ROOT:-/romm/library}, broker port ${BROKER_PORT:-8000}."
+say "Ready. ROM_ROOT=${ROM_ROOT:-/romm/library/roms}, broker port ${BROKER_PORT:-8000}."
 exit 0
