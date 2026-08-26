@@ -27,6 +27,10 @@
   settings.global.excludes = [
     "LICENSE"
     "*.lock"
+    # Vendored agent skills are third-party content managed by the skills CLI;
+    # reformatting them churns every update.
+    ".agents/**"
+    ".claude/**"
     # These have no trailing newline and no shebang, and s6 reads them literally.
     "*/s6-rc.d/*/type"
     "*/s6-rc.d/*/up"
