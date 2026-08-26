@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -37,6 +38,12 @@ type Probe struct {
 	ProcessAlive  bool   `json:"process_alive"`
 	LuaReady      bool   `json:"lua_ready"`
 	LuaState      string `json:"lua_state,omitempty"`
+
+	// RelaunchAbandoned is set once the crash-loop limiter gave up: nothing is
+	// running and nothing will restart it without an explicit POST /launch.
+	// /status exposes it so an operator can tell "idle, waiting for a user"
+	// from "broker surrendered", the same field the pcsx2 broker reports.
+	RelaunchAbandoned bool `json:"relaunch_abandoned"`
 }
 
 // Controller is the surface the HTTP layer drives. The API package depends on
@@ -45,6 +52,9 @@ type Controller interface {
 	// Launch replaces whatever is running. An empty romPath boots the idle
 	// game list, so the stream is never a black screen.
 	Launch(ctx context.Context, romPath string) (LaunchResult, error)
+	// LaunchIdle boots the idle game list only if the session is still idle,
+	// so a background relaunch cannot replace a game that launched meanwhile.
+	LaunchIdle(ctx context.Context) error
 	// SaveState blocks until the state for the slot is on disk.
 	SaveState(ctx context.Context, romPath string, flycastSlot int) error
 	// LoadState blocks until Flycast acknowledges the load.
@@ -70,19 +80,33 @@ type Runner struct {
 	proc        *os.Process
 	intentional bool // a kill we asked for, so the monitor must not relaunch
 
+	// rapidExits counts consecutive unexpected exits within rapidExitWindow.
+	// Reaching crashLoopLimit means the limiter has given up ("abandoned"):
+	// nothing relaunches until an explicit Launch resets the counter.
+	rapidExits int
+
 	// onExit is called when the emulator dies, so the session can be cleared.
 	onExit func()
+
+	// idleOK is consulted, under launchMu, before an idle relaunch. It answers
+	// whether the session is still idle; a launch that raced the relaunch owns
+	// the screen and must not be replaced by the game list.
+	idleOK func() bool
 }
 
-func NewRunner(cfg config.Config, log *slog.Logger, onExit func()) *Runner {
+func NewRunner(cfg config.Config, log *slog.Logger, onExit func(), idleOK func() bool) *Runner {
 	if onExit == nil {
 		onExit = func() {}
+	}
+	if idleOK == nil {
+		idleOK = func() bool { return true }
 	}
 	return &Runner{
 		cfg:    cfg,
 		log:    log,
 		ch:     newChannel(cfg.ChannelDir()),
 		onExit: onExit,
+		idleOK: idleOK,
 	}
 }
 
@@ -90,10 +114,72 @@ var _ Controller = (*Runner)(nil)
 
 // ── Launching ────────────────────────────────────────────────────────────────
 
+// crashLoopLimit is how many consecutive rapid exits the monitor tolerates
+// before it stops relaunching, matching the pcsx2 broker. One crash can be a
+// fluke; three in a row within the window is a broken setup, and respawning it
+// forever buries the reason under identical log lines.
+const crashLoopLimit = 3
+
+// Crash-loop pacing. Variables rather than constants so tests can shrink them.
+var (
+	// rapidExitWindow is how quickly an exit has to follow the launch to count
+	// toward the crash loop.
+	rapidExitWindow = 5 * time.Second
+	// relaunchDelayRapid spaces relaunches after a rapid death so a fast crash
+	// cannot become a tight loop; relaunchDelaySlow is the pause after a
+	// process that ran for a while.
+	relaunchDelayRapid = 5 * time.Second
+	relaunchDelaySlow  = 1 * time.Second
+)
+
 func (r *Runner) Launch(ctx context.Context, romPath string) (LaunchResult, error) {
 	r.launchMu.Lock()
 	defer r.launchMu.Unlock()
+	// An explicit launch is the recovery path out of an abandoned crash loop:
+	// the operator fixed the underlying failure and asked for a boot.
+	r.recoverCrashLoop()
+	return r.launchLocked(ctx, romPath)
+}
 
+func (r *Runner) recoverCrashLoop() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rapidExits = 0
+}
+
+// gaveUp reports whether the crash-loop limiter surrendered. Derived from the
+// counter rather than stored, so the two cannot drift.
+func (r *Runner) gaveUp() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rapidExits >= crashLoopLimit
+}
+
+// LaunchIdle boots the idle game list unless the session has moved on. The
+// callers that want the menu back — a stop, a save-and-exit, the monitor after
+// a crash — all schedule it after releasing their claim, so by the time it
+// runs a new game may have launched or be launching, and replacing that with a
+// menu would kill a session this call does not own. The check happens under
+// launchMu so it cannot interleave with a launch that is mid-flight.
+func (r *Runner) LaunchIdle(ctx context.Context) error {
+	r.launchMu.Lock()
+	defer r.launchMu.Unlock()
+	// Once the limiter surrendered, nothing relaunches until an explicit
+	// Launch — otherwise a stop would boot the same broken game list again
+	// while /status keeps claiming the broker gave up.
+	if r.gaveUp() {
+		r.log.Warn("not relaunching the game list, the crash-loop limiter gave up; POST /launch to recover")
+		return nil
+	}
+	if !r.idleOK() {
+		r.log.Info("skipping the idle game list, a newer session owns the emulator")
+		return nil
+	}
+	_, err := r.launchLocked(ctx, "")
+	return err
+}
+
+func (r *Runner) launchLocked(ctx context.Context, romPath string) (LaunchResult, error) {
 	if err := r.killLocked(ctx); err != nil {
 		return LaunchResult{}, err
 	}
@@ -148,6 +234,7 @@ func (r *Runner) spawn(romPath string) error {
 	r.mu.Lock()
 	r.proc = cmd.Process
 	r.intentional = false
+	r.writePIDFileLocked(cmd.Process.Pid)
 	r.mu.Unlock()
 
 	r.log.Info("flycast started", "pid", cmd.Process.Pid)
@@ -156,9 +243,9 @@ func (r *Runner) spawn(romPath string) error {
 }
 
 // flycastArgs builds the command line. Flycast only understands `-config` and
-// a single trailing ROM path (core/cfg/cl.cpp); every other flag is warned
-// about and ignored, and everything after the first positional argument is
-// discarded, so the ROM must come last.
+// a positional ROM path (core/cfg/cl.cpp); every other flag is warned about
+// and ignored, and when several positional arguments are given the last one
+// wins, so the ROM must come last.
 //
 // Each comma-separated `-config` entry has to repeat its section: the parser
 // resets to "expecting a section" after every comma.
@@ -196,6 +283,9 @@ func (r *Runner) monitor(cmd *exec.Cmd) {
 	intentional := r.intentional
 	if current {
 		r.proc = nil
+		// Under the same lock as the current-check: a newer spawn has already
+		// overwritten the file with its own PID, and must not lose it here.
+		r.removePIDFileLocked()
 	}
 	r.mu.Unlock()
 
@@ -212,16 +302,35 @@ func (r *Runner) monitor(cmd *exec.Cmd) {
 	r.log.Warn("flycast exited unexpectedly, returning to the game list",
 		"pid", cmd.Process.Pid, "alive", alive.Round(time.Millisecond), "err", err)
 
-	// Best effort, and only once: an emulator that dies immediately will die
-	// again, and respawning a broken renderer forever buries the reason under
-	// thousands of identical log lines. /launch clears the state either way.
-	if alive < 5*time.Second {
-		r.log.Error("flycast died within five seconds, not relaunching the game list")
+	// Only unexpected exits reach this point, so only they move the counter: a
+	// run that lasted a while resets it, a rapid death advances it.
+	rapid := alive < rapidExitWindow
+	r.mu.Lock()
+	if rapid {
+		r.rapidExits++
+	} else {
+		r.rapidExits = 0
+	}
+	exits := r.rapidExits
+	r.mu.Unlock()
+
+	if exits >= crashLoopLimit {
+		r.log.Error("flycast died rapidly several times in a row, giving up on the game list; "+
+			"fix the underlying failure, then POST /launch to recover",
+			"consecutive_rapid_exits", exits, "window", rapidExitWindow)
 		return
 	}
+
+	// Pause before relaunching so a fast crash cannot become a tight loop.
+	delay := relaunchDelaySlow
+	if rapid {
+		delay = relaunchDelayRapid
+	}
+	time.Sleep(delay)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := r.Launch(ctx, ""); err != nil {
+	if err := r.LaunchIdle(ctx); err != nil {
 		r.log.Error("could not relaunch the game list", "err", err)
 	}
 }
@@ -245,14 +354,20 @@ func (r *Runner) killLocked(ctx context.Context) error {
 	if proc == nil {
 		return nil
 	}
+	return r.terminate(ctx, proc.Pid)
+}
 
+// terminate takes a process group down: SIGTERM, a QUIT_WAIT grace, then
+// SIGKILL. It works on a bare PID because it also stops emulators this broker
+// did not spawn — the leftovers of a predecessor that died uncleanly.
+func (r *Runner) terminate(ctx context.Context, pid int) error {
 	// SIGTERM to the whole group: AppRun execs the real binary, so the group
 	// is just Flycast and whatever it spawned.
-	_ = syscall.Kill(-proc.Pid, syscall.SIGTERM)
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
 
 	deadline := time.Now().Add(r.cfg.QuitWait)
 	for time.Now().Before(deadline) {
-		if !alive(proc.Pid) {
+		if !alive(pid) {
 			return nil
 		}
 		select {
@@ -262,23 +377,121 @@ func (r *Runner) killLocked(ctx context.Context) error {
 		}
 	}
 
-	r.log.Warn("flycast ignored SIGTERM, sending SIGKILL", "pid", proc.Pid, "after", r.cfg.QuitWait)
-	_ = syscall.Kill(-proc.Pid, syscall.SIGKILL)
+	r.log.Warn("flycast ignored SIGTERM, sending SIGKILL", "pid", pid, "after", r.cfg.QuitWait)
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
 
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if !alive(proc.Pid) {
+		if !alive(pid) {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("flycast (pid %d) survived SIGKILL", proc.Pid)
+	return fmt.Errorf("flycast (pid %d) survived SIGKILL", pid)
 }
 
 func alive(pid int) bool {
 	// Signal 0 only checks permission and existence. The child has been
 	// reaped by monitor() if it is gone, so there is no zombie to confuse us.
 	return syscall.Kill(pid, 0) == nil
+}
+
+// ── Leftover emulators ───────────────────────────────────────────────────────
+//
+// The emulator is spawned with setsid and no death signal, so it survives the
+// broker. When the broker dies without its shutdown path — an OOM kill, a
+// panic off the recovered HTTP goroutines — s6 restarts only the broker, and
+// a fresh broker that knows nothing of the orphan would boot a second
+// emulator on top of it. The pidfile is how a broker finds what its
+// predecessor left running.
+
+// writePIDFileLocked records the spawned group leader. Callers hold mu, so
+// this cannot interleave with the monitor removing an older process's file.
+func (r *Runner) writePIDFileLocked(pid int) {
+	if r.cfg.PIDFile == "" {
+		return
+	}
+	err := os.MkdirAll(filepath.Dir(r.cfg.PIDFile), 0o755)
+	if err == nil {
+		err = os.WriteFile(r.cfg.PIDFile, []byte(strconv.Itoa(pid)+"\n"), 0o644)
+	}
+	if err != nil {
+		r.log.Warn("could not write the flycast pidfile; an unclean broker restart would leak this emulator",
+			"file", r.cfg.PIDFile, "err", err)
+	}
+}
+
+func (r *Runner) removePIDFileLocked() {
+	if r.cfg.PIDFile == "" {
+		return
+	}
+	if err := os.Remove(r.cfg.PIDFile); err != nil && !os.IsNotExist(err) {
+		r.log.Warn("could not remove the flycast pidfile", "file", r.cfg.PIDFile, "err", err)
+	}
+}
+
+// KillLeftover stops an emulator a previous broker left behind, so startup
+// never ends with two emulators fighting over the one display. Called once,
+// before the boot launch. An error is not fatal to the caller: a leftover
+// that cannot be stopped is logged and lived with, exactly like a display
+// that never comes up.
+func (r *Runner) KillLeftover(ctx context.Context) error {
+	if r.cfg.PIDFile == "" {
+		return nil
+	}
+	r.launchMu.Lock()
+	defer r.launchMu.Unlock()
+
+	raw, err := os.ReadFile(r.cfg.PIDFile)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", r.cfg.PIDFile, err)
+	}
+	discard := func() {
+		r.mu.Lock()
+		r.removePIDFileLocked()
+		r.mu.Unlock()
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 1 {
+		r.log.Warn("discarding a malformed flycast pidfile",
+			"file", r.cfg.PIDFile, "content", strings.TrimSpace(string(raw)))
+		discard()
+		return nil
+	}
+	if !alive(pid) {
+		discard()
+		return nil
+	}
+	// PIDs recycle, and an alive PID alone is not proof: it has to look like
+	// the process this broker spawns, which always carries the flycast binary
+	// path on its command line. Anything else is an innocent bystander.
+	if !cmdlineContains(pid, r.cfg.FlycastBin) {
+		r.log.Warn("the flycast pidfile points at an unrelated process, leaving it alone",
+			"pid", pid, "file", r.cfg.PIDFile)
+		discard()
+		return nil
+	}
+
+	r.log.Warn("stopping an emulator a previous broker left running", "pid", pid)
+	if err := r.terminate(ctx, pid); err != nil {
+		return fmt.Errorf("stopping leftover flycast: %w", err)
+	}
+	discard()
+	return nil
+}
+
+func cmdlineContains(pid int, needle string) bool {
+	// /proc cmdline is NUL-separated; a path needle never contains NUL, so a
+	// plain substring check is exact enough.
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil {
+		return false
+	}
+	return needle != "" && strings.Contains(string(raw), needle)
 }
 
 // ── Save states ──────────────────────────────────────────────────────────────
@@ -311,13 +524,15 @@ func (r *Runner) LoadState(ctx context.Context, flycastSlot int) error {
 func (r *Runner) Probe() Probe {
 	r.mu.Lock()
 	proc := r.proc
+	abandoned := r.rapidExits >= crashLoopLimit
 	r.mu.Unlock()
 
 	p := Probe{
-		BinaryPath: r.cfg.FlycastBin,
-		Display:    r.cfg.WaylandDisplay,
-		LuaReady:   r.ch.Ready(),
-		LuaState:   r.ch.State(),
+		BinaryPath:        r.cfg.FlycastBin,
+		Display:           r.cfg.WaylandDisplay,
+		LuaReady:          r.ch.Ready(),
+		LuaState:          r.ch.State(),
+		RelaunchAbandoned: abandoned,
 	}
 	if st, err := os.Stat(r.cfg.FlycastBin); err == nil && !st.IsDir() {
 		p.BinaryPresent = true

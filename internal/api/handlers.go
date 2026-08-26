@@ -30,7 +30,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"process_alive":     p.ProcessAlive,
 		"lua_ready":         p.LuaReady,
 		"lua_state":         p.LuaState,
-		"session_active":    snap.Active,
+		"session_active":    snap.Active && p.ProcessAlive,
 	})
 }
 
@@ -38,11 +38,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	snap := s.sess.Snapshot()
 	p := s.ctl.Probe()
 
-	// `active` means a game is loaded, not merely that a process exists: the
-	// idle game list is a healthy Flycast with no game. Callers that want the
-	// process answer read `process_alive`.
+	// `active` needs both halves: a loaded game (the idle game list is a
+	// healthy Flycast with no game) AND a live process — derived at read time,
+	// as the pcsx2 broker does, so a session record can never claim a game
+	// whose emulator is gone.
+	active := snap.Active && p.ProcessAlive
 	body := map[string]any{
-		"active":           snap.Active,
+		"active":           active,
 		"rom_path":         nil,
 		"rom_name":         nil,
 		"started_at":       nil,
@@ -52,8 +54,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"save_in_progress": s.sess.Saving(),
 		"process_alive":    p.ProcessAlive,
 		"lua_ready":        p.LuaReady,
+		// See Probe.RelaunchAbandoned for what this distinguishes.
+		"relaunch_abandoned": p.RelaunchAbandoned,
 	}
-	if snap.Active {
+	if active {
 		body["rom_path"] = snap.ROMPath
 		body["rom_name"] = snap.ROMName
 		body["started_at"] = rfc3339(snap.StartedAt)
@@ -91,10 +95,33 @@ func (s *Server) handleLaunch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.ctl.Launch(r.Context(), romPath)
+	// Detached: a launch replaces whatever is running, and a client that hangs
+	// up between the SIGTERM and the spawn would otherwise abort the sequence
+	// half-way — old emulator dying, new one never started, black screen.
+	ctx, cancel := detach(r.Context())
+	defer cancel()
+
+	res, err := s.ctl.Launch(ctx, romPath)
 	if err != nil {
 		s.sess.AbortLaunch()
 		s.refuse(w, r, http.StatusInternalServerError, "could not launch flycast", err.Error())
+		return
+	}
+
+	// The emulator can boot and die inside the launch window. The monitor's
+	// relaunch defers to this launch's claim, so nothing else notices;
+	// recording the session would enshrine a game whose process is gone and
+	// leave a black screen nothing recovers. A 500 makes RomM release its
+	// claim on a ROM that crashes the emulator.
+	if !s.ctl.Probe().ProcessAlive {
+		s.sess.AbortLaunch()
+		s.background(func(ctx context.Context) {
+			if err := s.ctl.LaunchIdle(ctx); err != nil {
+				s.log.Error("could not return to the game list", "err", err)
+			}
+		})
+		s.refuse(w, r, http.StatusInternalServerError, "flycast exited during launch",
+			fmt.Sprintf("process died within the launch window for %s", romPath))
 		return
 	}
 
@@ -134,21 +161,30 @@ func (s *Server) refuseResolve(w http.ResponseWriter, r *http.Request, raw strin
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	// A stop is as destructive as a launch, so it claims the session first;
+	// session.BeginStop documents the exclusions.
+	if err := s.sess.BeginStop(); s.sessionRefusal(w, r, err) {
+		return
+	}
+
 	// Detached: once the kill has started, a client that hangs up must not
 	// leave the emulator half-stopped.
 	ctx, cancel := detach(r.Context())
 	defer cancel()
 
 	if err := s.ctl.Kill(ctx); err != nil {
+		// The emulator may still be running, so what is loaded stays recorded.
+		s.sess.AbortStop()
 		s.refuse(w, r, http.StatusInternalServerError, "could not stop flycast", err.Error())
 		return
 	}
-	s.sess.Clear()
+	s.sess.EndStop()
 
 	// Back to the game list in the background so the stream is never a black
-	// screen. RomM gives this call five seconds and ignores the body.
+	// screen. RomM gives this call five seconds and ignores the body. The
+	// controller skips the relaunch if a new game claimed the emulator first.
 	s.background(func(ctx context.Context) {
-		if _, err := s.ctl.Launch(ctx, ""); err != nil {
+		if err := s.ctl.LaunchIdle(ctx); err != nil {
 			s.log.Error("could not return to the game list", "err", err)
 		}
 	})
@@ -165,7 +201,8 @@ func (s *Server) handleSaveState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.sess.BeginSave(); s.sessionRefusal(w, r, err) {
+	token, err := s.sess.BeginSave()
+	if s.sessionRefusal(w, r, err) {
 		return
 	}
 	romPath := s.sess.Snapshot().ROMPath
@@ -176,7 +213,7 @@ func (s *Server) handleSaveState(w http.ResponseWriter, r *http.Request) {
 	// caller that needs to know the write landed polls /status for
 	// save_in_progress, or waits for the state file.
 	s.background(func(ctx context.Context) {
-		defer s.sess.EndSave()
+		defer s.sess.EndSave(token)
 		if err := s.ctl.SaveState(ctx, romPath, flySlot); err != nil {
 			s.log.Error("save state failed", "slot", slot, "flycast_slot", flySlot, "err", err)
 			return
@@ -227,7 +264,8 @@ func (s *Server) handleSaveAndExit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.sess.BeginSave(); s.sessionRefusal(w, r, err) {
+	token, err := s.sess.BeginSave()
+	if s.sessionRefusal(w, r, err) {
 		return
 	}
 	romPath := s.sess.Snapshot().ROMPath
@@ -235,7 +273,7 @@ func (s *Server) handleSaveAndExit(w http.ResponseWriter, r *http.Request) {
 
 	if !wait {
 		s.background(func(ctx context.Context) {
-			s.saveAndExit(ctx, romPath, slot, flySlot)
+			s.saveAndExit(ctx, romPath, slot, flySlot, token)
 		})
 		writeJSON(w, http.StatusOK, map[string]any{"status": "queued", "slot": slot})
 		return
@@ -251,29 +289,44 @@ func (s *Server) handleSaveAndExit(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := detach(r.Context())
 	defer cancel()
 
-	saved := s.saveAndExit(ctx, romPath, slot, flySlot)
+	saved := s.saveAndExit(ctx, romPath, slot, flySlot, token)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "saved": saved, "slot": slot})
 }
 
 // saveAndExit writes the state, then stops the emulator and brings the game
 // list back. The emulator is killed even when the save fails: the user asked
 // to leave, and refusing to exit would strand the session.
-func (s *Server) saveAndExit(ctx context.Context, romPath string, slot, flySlot int) bool {
+//
+// The save claim is held through the kill: releasing it earlier would let a
+// new save or launch begin against an emulator that is already being torn
+// down.
+func (s *Server) saveAndExit(ctx context.Context, romPath string, slot, flySlot int, token uint64) bool {
 	saved := true
 	if err := s.ctl.SaveState(ctx, romPath, flySlot); err != nil {
 		s.log.Warn("save-and-exit could not save, exiting anyway",
 			"slot", slot, "flycast_slot", flySlot, "err", err)
 		saved = false
 	}
-	s.sess.EndSave()
+
+	// The claim can vanish mid-save: if the emulator crashed, the monitor
+	// cleared the session, and by the time the failed save returns — tens of
+	// seconds later — whatever is running belongs to a newer session. Killing
+	// or clearing then would take down the new owner's game.
+	if !s.sess.SaveHeld(token) {
+		s.log.Warn("save-and-exit lost its session mid-save, leaving the emulator alone", "slot", slot)
+		return saved
+	}
 
 	if err := s.ctl.Kill(ctx); err != nil {
 		s.log.Error("save-and-exit could not stop flycast", "err", err)
 	}
+	// Clear releases the save claim along with the session in one step; a
+	// separate EndSave first would briefly let a new save begin against the
+	// dead emulator.
 	s.sess.Clear()
 
 	s.background(func(ctx context.Context) {
-		if _, err := s.ctl.Launch(ctx, ""); err != nil {
+		if err := s.ctl.LaunchIdle(ctx); err != nil {
 			s.log.Error("could not return to the game list", "err", err)
 		}
 	})

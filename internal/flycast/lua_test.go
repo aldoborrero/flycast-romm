@@ -101,6 +101,42 @@ func TestChannelRoundTrip(t *testing.T) {
 	}
 }
 
+// Two commands in flight at once used to overwrite each other's command file
+// before the script read it: the loser's caller then timed out for no reason.
+// Do serialises, so every command reaches the script and gets its own ack.
+func TestChannelSerialisesConcurrentCommands(t *testing.T) {
+	ch := newTestChannel(t)
+	markReady(t, ch)
+
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	startFakeScript(t, ch, func(seq, _ string, _ int) (string, string) {
+		mu.Lock()
+		seen[seq] = true
+		mu.Unlock()
+		return "ok", ""
+	})
+
+	const callers = 8
+	errs := make(chan error, callers)
+	for i := range callers {
+		go func(slot int) {
+			errs <- ch.Do(context.Background(), 5*time.Second, "load", slot)
+		}(i)
+	}
+	for range callers {
+		if err := <-errs; err != nil {
+			t.Fatalf("a concurrent Do failed: %v", err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != callers {
+		t.Fatalf("the script saw %d distinct commands, want %d", len(seen), callers)
+	}
+}
+
 func TestChannelSurfacesRefusals(t *testing.T) {
 	ch := newTestChannel(t)
 	markReady(t, ch)

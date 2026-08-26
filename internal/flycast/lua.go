@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -35,6 +36,13 @@ var (
 type channel struct {
 	dir string
 	seq atomic.Uint64
+
+	// mu serialises Do. The protocol is strictly one command in flight — the
+	// script consumes `command` and answers in `ack` — and two concurrent
+	// sends would overwrite each other's command file before the script read
+	// it, losing one command and timing out its caller. The session guards
+	// upstream make overlap rare, but the invariant belongs to the channel.
+	mu sync.Mutex
 }
 
 func newChannel(dir string) *channel { return &channel{dir: dir} }
@@ -99,6 +107,9 @@ func (c *channel) WaitState(ctx context.Context, want string, timeout time.Durat
 // makes the ack unambiguous: the script echoes it back, and an ack carrying an
 // older sequence is a leftover from a previous command.
 func (c *channel) Do(ctx context.Context, timeout time.Duration, verb string, arg int) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if !c.Ready() {
 		return ErrLuaUnavailable
 	}

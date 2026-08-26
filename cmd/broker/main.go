@@ -46,6 +46,11 @@ func run() error {
 	slog.SetDefault(log)
 	log.Info("flycast romm broker starting", "version", version)
 
+	// Environment values Load could not use; it ran before this logger did.
+	for _, w := range cfg.Warnings {
+		log.Warn(w)
+	}
+
 	if cfg.Secret == "" {
 		// Not fatal, because a local debugging container is a real use, but
 		// the consequence is worth stating: the broker runs as root and an
@@ -57,7 +62,7 @@ func run() error {
 	}
 
 	sess := session.New()
-	runner := flycast.NewRunner(cfg, log, sess.Clear)
+	runner := flycast.NewRunner(cfg, log, sess.Clear, sess.IdleRelaunchOK)
 
 	if err := runner.EnsureChannelDir(); err != nil {
 		return err
@@ -65,6 +70,12 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// A predecessor that died uncleanly leaves its emulator running; stop it
+	// before booting one of our own, or two of them fight over the display.
+	if err := runner.KillLeftover(ctx); err != nil {
+		log.Error("could not stop a leftover emulator; a second one is about to start", "err", err)
+	}
 
 	if runner.WaitForDisplay(ctx) {
 		log.Info("display is up", "display", runner.Probe().Display)

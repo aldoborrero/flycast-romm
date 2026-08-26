@@ -219,7 +219,8 @@ func (s *Server) sessionRefusal(w http.ResponseWriter, r *http.Request, err erro
 		return false
 	case errors.Is(err, session.ErrNoGame),
 		errors.Is(err, session.ErrSaveInProgress),
-		errors.Is(err, session.ErrLaunchInProgress):
+		errors.Is(err, session.ErrLaunchInProgress),
+		errors.Is(err, session.ErrStopInProgress):
 		s.refuse(w, r, http.StatusConflict, err.Error(), err.Error())
 	default:
 		s.refuse(w, r, http.StatusInternalServerError, "internal broker error", err.Error())

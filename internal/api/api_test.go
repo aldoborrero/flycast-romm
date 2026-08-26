@@ -37,33 +37,62 @@ type fakeController struct {
 	launchErr error
 	saveErr   error
 	loadErr   error
+	killErr   error
 	volumeErr error
 	muteErr   error
 	muteState bool
 	ready     bool
 	probe     flycast.Probe
+
+	// gates block the named op (call.Op) after it is recorded, so a test can
+	// hold a call in flight and observe what the handlers allow meanwhile.
+	gates map[string]chan struct{}
+
+	// launchCtxErr records whether Launch's context was still alive once its
+	// gate (if any) opened.
+	launchCtxErr error
 }
 
 func newFake() *fakeController {
-	return &fakeController{seen: make(chan call, 32), ready: true}
+	return &fakeController{
+		seen:  make(chan call, 32),
+		ready: true,
+		// A live process is the healthy default: handleLaunch refuses to
+		// record a session for a dead one, and /status derives `active` from
+		// it.
+		probe: flycast.Probe{ProcessAlive: true},
+	}
 }
 
 func (f *fakeController) record(c call) {
 	f.mu.Lock()
 	f.calls = append(f.calls, c)
+	gate := f.gates[c.Op]
 	f.mu.Unlock()
 	select {
 	case f.seen <- c:
 	default:
 	}
+	// Block after publishing to seen, so await() observes the held call.
+	if gate != nil {
+		<-gate
+	}
 }
 
-func (f *fakeController) Launch(_ context.Context, romPath string) (flycast.LaunchResult, error) {
+func (f *fakeController) Launch(ctx context.Context, romPath string) (flycast.LaunchResult, error) {
 	f.record(call{Op: "launch", Str: romPath})
+	f.mu.Lock()
+	f.launchCtxErr = ctx.Err()
+	f.mu.Unlock()
 	if f.launchErr != nil {
 		return flycast.LaunchResult{}, f.launchErr
 	}
 	return flycast.LaunchResult{ROMPath: romPath, Ready: f.ready}, nil
+}
+
+func (f *fakeController) LaunchIdle(context.Context) error {
+	f.record(call{Op: "launch-idle"})
+	return nil
 }
 
 func (f *fakeController) SaveState(_ context.Context, romPath string, slot int) error {
@@ -78,7 +107,7 @@ func (f *fakeController) LoadState(_ context.Context, slot int) error {
 
 func (f *fakeController) Kill(context.Context) error {
 	f.record(call{Op: "kill"})
-	return nil
+	return f.killErr
 }
 
 func (f *fakeController) SetVolume(_ context.Context, level int) error {
@@ -234,6 +263,19 @@ func quote(s string) string {
 	return string(b)
 }
 
+// waitFor polls cond until it holds, for asserting on state a handler updates
+// from a goroutine.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition never held")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 func TestSecretIsRequired(t *testing.T) {
@@ -317,6 +359,89 @@ func TestLaunchIgnoresRomNameForFolders(t *testing.T) {
 	}
 }
 
+// A game can boot and die inside the launch window; the monitor's relaunch
+// defers to the launch's claim, so the handler is the only one who can notice.
+// Recording the session anyway would leave /status claiming a game whose
+// process is gone, behind a black screen nothing recovers.
+func TestLaunchRefusesToRecordADeadProcess(t *testing.T) {
+	h := newHarness(t)
+	rom := h.rom("dc/game.chd")
+	h.fake.probe.ProcessAlive = false
+
+	code, _ := h.post("/launch", `{"rom_path":`+quote(rom)+`}`)
+	if code != http.StatusInternalServerError {
+		t.Fatalf("POST /launch with a dead process = %d, want 500", code)
+	}
+	if h.sess.Snapshot().Active {
+		t.Error("the session recorded a game whose process died in the launch window")
+	}
+	h.fake.await(t, "launch-idle")
+}
+
+// A crash after a completed launch must not leave /status claiming the game:
+// `active` is derived from the live process, as the pcsx2 broker does, so the
+// session record cannot outlive the emulator it describes.
+func TestStatusDoesNotReportAGameWithoutAProcess(t *testing.T) {
+	h := newHarness(t)
+	h.launch("dc/game.chd")
+	h.fake.probe.ProcessAlive = false
+
+	code, body := h.do(http.MethodGet, "/status", "", true)
+	if code != http.StatusOK {
+		t.Fatalf("GET /status = %d", code)
+	}
+	if body["active"] != false {
+		t.Errorf("active = %v with a dead process, want false", body["active"])
+	}
+	if body["rom_path"] != nil {
+		t.Errorf("rom_path = %v with a dead process, want null", body["rom_path"])
+	}
+}
+
+// A client that hangs up mid-launch must not abort the kill-and-spawn
+// sequence: the SIGTERM has already been sent, and cancelling half-way leaves
+// the old emulator dying and the new one never started.
+func TestLaunchSurvivesTheClientHangingUp(t *testing.T) {
+	h := newHarness(t)
+	rom := h.rom("dc/game.chd")
+
+	gate := make(chan struct{})
+	h.fake.gates = map[string]chan struct{}{"launch": gate}
+
+	reqCtx, hangUp := context.WithCancel(context.Background())
+	clientDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, h.srv.URL+"/launch",
+			strings.NewReader(`{"rom_path":`+quote(rom)+`}`))
+		if err != nil {
+			return
+		}
+		req.Header.Set("X-Broker-Secret", testSecret)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := h.srv.Client().Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	h.fake.await(t, "launch")
+	hangUp() // the client goes away while the controller is mid-launch
+	<-clientDone
+	// Give a request-scoped context time to see the disconnect, then let the
+	// launch continue.
+	time.Sleep(100 * time.Millisecond)
+	close(gate)
+
+	waitFor(t, func() bool { return h.sess.Snapshot().Active })
+	h.fake.mu.Lock()
+	ctxErr := h.fake.launchCtxErr
+	h.fake.mu.Unlock()
+	if ctxErr != nil {
+		t.Fatalf("the controller's context died with the client: %v", ctxErr)
+	}
+}
+
 func TestLaunchRefusesPathsOutsideTheRoot(t *testing.T) {
 	h := newHarness(t)
 	outside := filepath.Join(t.TempDir(), "evil.chd")
@@ -388,11 +513,62 @@ func TestStopReturnsToTheGameList(t *testing.T) {
 		t.Fatalf("DELETE /launch = %d %v", code, body)
 	}
 	h.fake.await(t, "kill")
-	if c := h.fake.await(t, "launch"); c.Str != "" {
-		t.Errorf("after DELETE the controller launched %q, want the idle game list", c.Str)
-	}
+	h.fake.await(t, "launch-idle")
 	if h.sess.Snapshot().Active {
 		t.Error("DELETE /launch left the session active")
+	}
+}
+
+// Killing the emulator while a save is writing truncates the state — and the
+// truncated file then reads back as stable, so the loss is silent. The stop is
+// refused instead, like every other call that conflicts with a save.
+func TestStopIsRefusedDuringASave(t *testing.T) {
+	h := newHarness(t)
+	h.launch("dc/game.chd")
+
+	release := make(chan struct{})
+	h.fake.gates = map[string]chan struct{}{"save": release}
+
+	if code, _ := h.post("/save-state", `{"slot":1}`); code != http.StatusOK {
+		t.Fatalf("POST /save-state = %d", code)
+	}
+	h.fake.await(t, "save")
+
+	code, body := h.do(http.MethodDelete, "/launch", "", true)
+	if code != http.StatusConflict {
+		t.Fatalf("DELETE /launch during a save = %d, want 409", code)
+	}
+	if body["error"] != session.ErrSaveInProgress.Error() {
+		t.Errorf("error = %v, want %q", body["error"], session.ErrSaveInProgress)
+	}
+	if h.fake.count("kill") != 0 {
+		t.Error("the refused stop still killed the emulator")
+	}
+
+	close(release)
+	waitFor(t, func() bool { return !h.sess.Saving() })
+	if code, _ := h.do(http.MethodDelete, "/launch", "", true); code != http.StatusOK {
+		t.Fatalf("DELETE /launch after the save finished = %d, want 200", code)
+	}
+}
+
+// A kill that fails leaves the emulator running, so the stop claim has to be
+// released without wiping the session — and without wedging later stops.
+func TestFailedStopReleasesTheClaim(t *testing.T) {
+	h := newHarness(t)
+	h.launch("dc/game.chd")
+	h.fake.killErr = errors.New("flycast survived SIGKILL")
+
+	if code, _ := h.do(http.MethodDelete, "/launch", "", true); code != http.StatusInternalServerError {
+		t.Fatalf("DELETE /launch with a failing kill = %d, want 500", code)
+	}
+	if !h.sess.Snapshot().Active {
+		t.Error("a failed stop forgot the game that is still running")
+	}
+
+	h.fake.killErr = nil
+	if code, _ := h.do(http.MethodDelete, "/launch", "", true); code != http.StatusOK {
+		t.Fatalf("DELETE /launch after a failed stop = %d, want 200", code)
 	}
 }
 
@@ -523,6 +699,71 @@ func TestSaveAndExitWithoutWaitingIsQueued(t *testing.T) {
 	}
 	h.fake.await(t, "save")
 	h.fake.await(t, "kill")
+}
+
+// The save claim must outlive the kill: releasing it as soon as the state is
+// written would let a new save or launch begin against an emulator that is
+// already being torn down.
+func TestSaveAndExitHoldsTheSaveClaimThroughTheKill(t *testing.T) {
+	h := newHarness(t)
+	h.launch("dc/game.chd")
+
+	gate := make(chan struct{})
+	h.fake.gates = map[string]chan struct{}{"kill": gate}
+
+	var code int
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		code, _ = h.post("/save-and-exit", `{"wait":true}`)
+	}()
+
+	h.fake.await(t, "kill")
+	if !h.sess.Saving() {
+		t.Error("the save claim was released before the emulator was down")
+	}
+	if c, body := h.post("/save-state", `{"slot":1}`); c != http.StatusConflict {
+		t.Errorf("POST /save-state during the exit = %d %v, want 409", c, body)
+	}
+
+	close(gate)
+	<-done
+	if code != http.StatusOK {
+		t.Fatalf("POST /save-and-exit = %d, want 200", code)
+	}
+	if h.sess.Saving() || h.sess.Snapshot().Active {
+		t.Error("save-and-exit left a claim or a session behind")
+	}
+}
+
+// If the emulator crashes mid-save, the monitor clears the session and a new
+// launch may own the emulator by the time save-and-exit resumes. It must then
+// leave the emulator alone instead of killing the new owner's game.
+func TestSaveAndExitLosingItsClaimDoesNotKill(t *testing.T) {
+	h := newHarness(t)
+	h.launch("dc/game.chd")
+
+	gate := make(chan struct{})
+	h.fake.gates = map[string]chan struct{}{"save": gate}
+
+	var code int
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		code, _ = h.post("/save-and-exit", `{"wait":true}`)
+	}()
+
+	h.fake.await(t, "save")
+	h.sess.Clear() // the emulator died mid-save and the monitor cleared the session
+	close(gate)
+	<-done
+
+	if code != http.StatusOK {
+		t.Fatalf("POST /save-and-exit = %d, want 200", code)
+	}
+	if h.fake.count("kill") != 0 {
+		t.Error("save-and-exit killed the emulator after losing its session claim")
+	}
 }
 
 func TestSaveAndExitNeedsAGame(t *testing.T) {
