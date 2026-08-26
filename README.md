@@ -1,5 +1,8 @@
 # flycast-romm-integration
 
+[![CI](https://github.com/aldoborrero/flycast-romm/actions/workflows/ci.yml/badge.svg)](https://github.com/aldoborrero/flycast-romm/actions/workflows/ci.yml)
+[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+
 A [LinuxServer Docker Mod](https://docs.linuxserver.io/general/container-customization)
 that lets [RomM](https://github.com/rommapp/romm) drive
 [Flycast](https://github.com/flyinghead/flycast). Pick a Dreamcast, NAOMI or
@@ -207,17 +210,17 @@ Everything is JSON. Send `X-Broker-Secret` on every request when
 `BROKER_SECRET` is set, or get a `403`. `GET /health` is the exception, so it
 works as a container healthcheck.
 
-| Endpoint              | Does                                                                 | Notable failures                                           |
-| --------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `GET /health`         | Whether Flycast, the display and the Lua channel are all there       | none                                                       |
-| `GET /status`         | The loaded game, the slot configuration, whether a save is in flight | none                                                       |
-| `POST /launch`        | Boot a ROM. Waits up to `LAUNCH_WAIT` for it to report running       | `400` bad or out-of-root path, `422` missing or unbootable |
-| `DELETE /launch`      | Stop the game, back to the game list                                 | none                                                       |
-| `POST /save-state`    | Save to a slot without exiting. Confirms the write in the background | `409` no game running or a save in flight                  |
-| `POST /load-state`    | Load a slot into the running game                                    | `409` no game or a save in flight, `500` Flycast refused   |
-| `POST /save-and-exit` | Save, confirm the write, then stop. `wait: false` to fire and forget | `409` no game running                                      |
-| `POST /volume`        | `{"level": 0-100}`                                                   | `400` out of range, `500` pactl failed                     |
-| `POST /mute`          | `{"mute": true}`, or `{}` to toggle. Read back from PulseAudio       | `500` pactl failed                                         |
+| Endpoint              | Does                                                                                 | Notable failures                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `GET /health`         | Whether Flycast, the display and the Lua channel are all there                       | none                                                                                                         |
+| `GET /status`         | The loaded game, whether a save is in flight, whether the crash-loop limiter gave up | none                                                                                                         |
+| `POST /launch`        | Boot a ROM. Waits up to `LAUNCH_WAIT` for it to report running                       | `400` bad or out-of-root path, `422` missing or unbootable, `409` busy, `500` Flycast died during the launch |
+| `DELETE /launch`      | Stop the game, back to the game list                                                 | `409` while a save or a launch is in flight                                                                  |
+| `POST /save-state`    | Save to a slot without exiting. Confirms the write in the background                 | `409` no game, or a save, launch or stop in flight                                                           |
+| `POST /load-state`    | Load a slot into the running game                                                    | `409` no game or the lifecycle is busy, `500` Flycast refused                                                |
+| `POST /save-and-exit` | Save, confirm the write, then stop. `wait: false` to fire and forget                 | `409` no game running or another save in flight                                                              |
+| `POST /volume`        | `{"level": 0-100}`                                                                   | `400` out of range, `500` pactl failed                                                                       |
+| `POST /mute`          | `{"mute": true}`, or `{}` to toggle. Read back from PulseAudio                       | `500` pactl failed                                                                                           |
 
 Slots are RomM's 1–10. Slot 10 is the autosave slot, and `0` means "use it",
 which is what `/save-and-exit` sends. Internally each maps to Flycast index
@@ -227,6 +230,20 @@ which is what `/save-and-exit` sends. Internally each maps to Flycast index
 five seconds. Poll `/status` for `save_in_progress` to know it landed.
 `/save-and-exit` does block, because killing the emulator before the write
 settles truncates the state.
+
+### When Flycast dies
+
+The broker brings the idle game list back after an unexpected exit, so the
+stream never sits on a black screen — after a short pause, and only if no new
+game claimed the emulator meanwhile. Three rapid deaths in a row and it gives
+up rather than bury the cause under respawns: `/status` then reports
+`relaunch_abandoned: true`, and the next `POST /launch` resets the limiter. A
+broker that itself died uncleanly finds the emulator its predecessor left
+running (through `FLYCAST_PIDFILE`) and stops it at startup instead of booting
+a second one. Lifecycle calls that would interleave destructively — a stop
+during a save, two launches at once — are refused with a `409` rather than
+raced; the full state machine is documented in
+[docs/CONTRACT.md](docs/CONTRACT.md) D8.
 
 ## Security
 
