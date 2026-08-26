@@ -161,3 +161,119 @@ func TestResolveAcceptsArcadeCarts(t *testing.T) {
 		}
 	}
 }
+
+// A .m3u playlist is its own ROM in a loose-file library, and RomM sends its
+// path directly. Flycast cannot boot a playlist, so the broker resolves it to
+// the first disc the playlist names.
+func TestResolvePlaylistBootsFirstDisc(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	write(t, filepath.Join(dir, "Shenmue (Disc 1).chd"))
+	write(t, filepath.Join(dir, "Shenmue (Disc 2).chd"))
+	write(t, filepath.Join(dir, "Shenmue (Disc 3).chd"))
+	m3u := filepath.Join(dir, "Shenmue.m3u")
+	if err := os.WriteFile(m3u, []byte("Shenmue (Disc 1).chd\nShenmue (Disc 2).chd\nShenmue (Disc 3).chd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveROM(root, m3u)
+	if err != nil {
+		t.Fatalf("ResolveROM: %v", err)
+	}
+	if filepath.Base(got) != "Shenmue (Disc 1).chd" {
+		t.Fatalf("ResolveROM = %q, want the first disc", got)
+	}
+}
+
+// A Windows-authored playlist has CRLF line endings and may carry blank lines
+// or #EXTM3U-style comments before the first disc.
+func TestResolvePlaylistSkipsCommentsBlanksAndCR(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	write(t, filepath.Join(dir, "D2 (Disc 1).chd"))
+	m3u := filepath.Join(dir, "D2.m3u")
+	body := "#EXTM3U\r\n\r\nD2 (Disc 1).chd\r\n"
+	if err := os.WriteFile(m3u, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveROM(root, m3u)
+	if err != nil {
+		t.Fatalf("ResolveROM: %v", err)
+	}
+	if filepath.Base(got) != "D2 (Disc 1).chd" {
+		t.Fatalf("ResolveROM = %q, want the first disc", got)
+	}
+}
+
+// The disc a playlist names is resolved through ResolveROM again, so an entry
+// that escapes the library is refused exactly like a direct launch would be.
+func TestResolvePlaylistRejectsEscapingEntry(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	m3u := filepath.Join(dir, "evil.m3u")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m3u, []byte("../../../../etc/passwd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ResolveROM(root, m3u); !errors.Is(err, ErrOutsideRoot) {
+		t.Fatalf("ResolveROM = %v, want ErrOutsideRoot", err)
+	}
+}
+
+func TestResolvePlaylistMissingDisc(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	m3u := filepath.Join(dir, "gone.m3u")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m3u, []byte("Gone (Disc 1).chd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ResolveROM(root, m3u); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ResolveROM = %v, want ErrNotFound", err)
+	}
+}
+
+func TestResolvePlaylistEmpty(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	m3u := filepath.Join(dir, "empty.m3u")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m3u, []byte("# only a comment\n\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ResolveROM(root, m3u); !errors.Is(err, ErrNoBootable) {
+		t.Fatalf("ResolveROM = %v, want ErrNoBootable", err)
+	}
+}
+
+// A playlist naming another playlist is refused, not followed: Flycast cannot
+// boot either and following it risks looping.
+func TestResolvePlaylistRejectsNestedPlaylist(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "dc")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "Game.chd"))
+	if err := os.WriteFile(filepath.Join(dir, "inner.m3u"), []byte("Game.chd\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outer := filepath.Join(dir, "outer.m3u")
+	if err := os.WriteFile(outer, []byte("inner.m3u\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ResolveROM(root, outer); !errors.Is(err, ErrNoBootable) {
+		t.Fatalf("ResolveROM = %v, want ErrNoBootable", err)
+	}
+}

@@ -1,6 +1,7 @@
 package flycast
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +28,13 @@ var (
 // .bin is deliberately absent: it is a CUE track, never a boot target.
 var Extensions = []string{".chd", ".gdi", ".cdi", ".cue", ".zip", ".7z", ".elf"}
 
+// playlistExt is a multi-disc playlist. Flycast has no playlist loader — it is
+// deliberately absent from Extensions — so a .m3u is resolved to the first disc
+// it names rather than handed to the emulator, which would reject it as an
+// unknown disk format. Switching discs is a runtime action inside Flycast, not
+// something the .m3u drives.
+const playlistExt = ".m3u"
+
 // searchGlobs bound how deep a folder-organised game is searched: the folder
 // itself, then one level down for the per-disc subfolders some sets use
 // (Game/Disc 1/game.gdi). Nothing deeper — a launch must not pay for a full
@@ -41,7 +49,9 @@ var discRe = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])(?:disc|disk|cd)[\s._-]*(\d+
 // RomM addresses a multi-file ROM by its folder, because Rom.full_path is
 // fs_path/fs_name and for a multi-file ROM fs_name *is* the directory. A
 // library laid out one game per folder therefore sends a path Flycast cannot
-// boot, and the disc image has to be found inside it.
+// boot, and the disc image has to be found inside it. A .m3u playlist arrives
+// as a plain file and is just as unbootable, so it resolves to the first disc
+// it names.
 func ResolveROM(root, raw string) (string, error) {
 	path, err := filepath.Abs(strings.TrimSpace(raw))
 	if err != nil {
@@ -64,6 +74,9 @@ func ResolveROM(root, raw string) (string, error) {
 		return "", ErrNotFound
 	}
 	if !info.IsDir() {
+		if isPlaylist(path) {
+			return resolvePlaylist(root, path)
+		}
 		if !supported(path) {
 			return "", fmt.Errorf("%w: unsupported extension %q", ErrNoBootable, filepath.Ext(path))
 		}
@@ -75,6 +88,46 @@ func ResolveROM(root, raw string) (string, error) {
 		return "", ErrNoBootable
 	}
 	return best, nil
+}
+
+func isPlaylist(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), playlistExt)
+}
+
+// resolvePlaylist reads a .m3u and returns the first disc it names, resolved
+// relative to the playlist's own directory. The disc goes back through
+// ResolveROM so it inherits the same containment and symlink checks as any
+// direct launch; a playlist that names another playlist is refused rather than
+// followed, which also stops it looping back on itself.
+func resolvePlaylist(root, m3u string) (string, error) {
+	f, err := os.Open(m3u)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	defer f.Close()
+
+	entry := ""
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		entry = line
+		break
+	}
+	if entry == "" {
+		return "", ErrNoBootable
+	}
+	if isPlaylist(entry) {
+		return "", fmt.Errorf("%w: playlist names another playlist %q", ErrNoBootable, entry)
+	}
+
+	disc := entry
+	if !filepath.IsAbs(disc) {
+		disc = filepath.Join(filepath.Dir(m3u), disc)
+	}
+	return ResolveROM(root, disc)
 }
 
 type candidate struct {
