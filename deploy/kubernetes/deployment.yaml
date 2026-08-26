@@ -55,8 +55,10 @@ spec:
               # unreviewed upgrade.
               value: ghcr.io/aldoborrero/flycast-romm-integration:latest
             - name: ROM_ROOT
-              # Must match the path RomM mounts its library at.
-              value: /romm/library
+              # The paths RomM sends are <LIBRARY_BASE_PATH>/roms/<platform>/…,
+              # so the broker's root is the roms directory, not the library
+              # base. This must be the exact path the volume below is mounted at.
+              value: /romm/library/roms
             - name: BROKER_SECRET
               valueFrom:
                 secretKeyRef:
@@ -103,7 +105,10 @@ spec:
             - name: config
               mountPath: /config
             - name: roms
-              mountPath: /romm/library
+              # The same path RomM mounts the library's roms directory at, so a
+              # rom_path RomM sends resolves to the same file here. Keep this and
+              # ROM_ROOT above identical.
+              mountPath: /romm/library/roms
               readOnly: true
             - name: dshm
               mountPath: /dev/shm
