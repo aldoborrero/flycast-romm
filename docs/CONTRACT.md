@@ -736,8 +736,11 @@ Two mechanisms stay as backstops, and are documented rather than wired in:
 - **Filesystem confirmation** is kept even though Lua acks the save. The broker
   still polls the state file for a new-or-changed mtime and then a stable size
   before it lets `/save-and-exit` kill the process, exactly as the Dolphin broker
-  does. A Lua ack that arrives before the OS has flushed is still a truncated
-  state.
+  does. This is mandatory, not defensive: `dc_savestate` opens the final path
+  with `"wb"` and writes in place (`core/nullDC.cpp` — the tmp variant at index
+  -2 is an in-RAM quicksave, not a temp file), so an interrupted write is a
+  truncated state, and a Lua ack that arrives before the OS has flushed proves
+  nothing about the bytes.
 - **`wtype`** is present in the base image and is the fallback if Lua turns out to
   be unavailable at runtime. The broker detects that case — no `ready` file
   within the launch window — and reports it on `/health` instead of failing
@@ -849,11 +852,6 @@ per operation, and every path that kills, spawns or writes takes one first:
 
 ## 11. Known unknowns (not blocking, but unverified)
 
-- Whether Flycast's savestate write is atomic or a truncate-then-write. The
-  write-confirmation loop has to assume the latter (poll for a stable size), as
-  the Dolphin broker does.
-- Whether `python3` exists in the flycast image. Irrelevant to a Go broker, but it
-  determines whether any init script can use it.
 - The exact BIOS filename set Flycast requires per platform, beyond
   `dc_boot.bin` / `dc_flash.bin` / `naomi.zip` / `awbios.zip`.
 - Whether the Selkies joystick interposer (`LD_PRELOAD` of
