@@ -4,11 +4,17 @@
 perSystem.self.default.overrideAttrs (old: {
   pname = "${old.pname}-tests";
   doCheck = true;
+  # The race detector needs cgo. The shipping binary stays CGO_ENABLED=0 in
+  # the package build; this derivation only exists to run the tests, and a
+  # broker this concurrent should never pass CI without -race.
+  env = (old.env or { }) // {
+    CGO_ENABLED = 1;
+  };
   # buildGoModule's default checkPhase only tests the subPackages it builds.
   # Everything under internal/ needs testing too.
   checkPhase = ''
     runHook preCheck
-    go test -count=1 ./...
+    go test -race -count=1 ./...
     runHook postCheck
   '';
 })
