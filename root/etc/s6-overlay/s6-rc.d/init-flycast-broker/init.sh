@@ -8,8 +8,13 @@ say() { echo "[flycast-broker-mod] $*"; }
 
 CONFIG_DIR="${FLYCAST_CONFIG_DIR:-/config/.config/flycast}"
 CHANNEL_DIR="${CONFIG_DIR}/romm-broker"
-PUID="${PUID:-1000}"
-PGID="${PGID:-1000}"
+
+# Without PUID the linuxserver init leaves abc at its baked-in uid (911, not
+# 1000), so the fallback is abc's real ids — files chowned to the wrong id
+# wedge the lua channel with no visible error. The broker applies the same
+# fallback for the files it creates itself.
+PUID="${PUID:-$(id -u abc 2>/dev/null || echo 1000)}"
+PGID="${PGID:-$(id -g abc 2>/dev/null || echo 1000)}"
 
 # ── Stop the desktop launching its own Flycast ───────────────────────────────
 # The base image copies /defaults/autostart_wayland to ~/.config/labwc/autostart

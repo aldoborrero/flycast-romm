@@ -1,6 +1,9 @@
 package config
 
 import (
+	"os"
+	"os/user"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -92,6 +95,84 @@ func TestDurationsAcceptSecondsAndGoSyntax(t *testing.T) {
 	}
 	if c.QuitWait != 6*time.Second {
 		t.Errorf("an unparseable QUIT_WAIT gave %s, want the default", c.QuitWait)
+	}
+}
+
+// A typo'd value must not silently become the default: the fallback happens,
+// but it is reported so `docker logs` explains why the knob had no effect.
+func TestMalformedValuesWarnAndFallBack(t *testing.T) {
+	t.Setenv("BROKER_PORT", "80O0")
+	t.Setenv("DISPLAY_WAIT", "-5")
+	t.Setenv("BROKER_LOG_LEVEL", "VERBOSE")
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Port != 8000 {
+		t.Errorf("Port = %d, want the default 8000", c.Port)
+	}
+	if c.DisplayWait != 30*time.Second {
+		t.Errorf("DisplayWait = %s, want the default 30s", c.DisplayWait)
+	}
+	if got, want := len(c.Warnings), 3; got != want {
+		t.Errorf("Warnings = %q, want %d entries", c.Warnings, want)
+	}
+}
+
+// underRoot compares symlink-resolved ROM paths against ROM_ROOT, so a root
+// with a symlinked component would refuse every ROM in it unless the root is
+// resolved too.
+func TestROMRootResolvesSymlinks(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "roms")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ROM_ROOT", link)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ROMRoot != want {
+		t.Errorf("ROMRoot = %q, want the resolved %q", c.ROMRoot, want)
+	}
+}
+
+// Without PUID, a linuxserver container keeps abc at its baked-in uid — 911,
+// not 1000 — so the default has to be the user's real ids, not a constant.
+func TestUIDDefaultsToTheEmulatorUsersIDs(t *testing.T) {
+	me, err := user.Current()
+	if err != nil {
+		t.Skipf("no current user: %v", err)
+	}
+	t.Setenv("PUID", "")
+	t.Setenv("PGID", "")
+	t.Setenv("FLYCAST_USER", me.Username)
+
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.UID != os.Getuid() || c.GID != os.Getgid() {
+		t.Errorf("UID:GID = %d:%d, want the emulator user's real %d:%d",
+			c.UID, c.GID, os.Getuid(), os.Getgid())
+	}
+
+	// An explicit PUID still wins, and an unknown user falls back to 1000.
+	t.Setenv("PUID", "4242")
+	if c, err = Load(); err != nil || c.UID != 4242 {
+		t.Errorf("UID with PUID=4242 = %d (err %v), want 4242", c.UID, err)
+	}
+	t.Setenv("PUID", "")
+	t.Setenv("FLYCAST_USER", "no-such-user-xyz")
+	if c, err = Load(); err != nil || c.UID != 1000 {
+		t.Errorf("UID for an unknown user = %d (err %v), want 1000", c.UID, err)
 	}
 }
 
