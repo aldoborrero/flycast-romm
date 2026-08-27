@@ -13,7 +13,7 @@ set -euo pipefail
 
 BROKER="${BROKER:-http://localhost:8000}"
 SECRET="${STREAMING_BROKER_SECRET:-${BROKER_SECRET:-}}"
-ROM_ROOT="${ROM_ROOT:-/romm/library}"
+ROM_ROOT="${ROM_ROOT:-/romm/library/roms}"
 ROM="${ROM:-}"
 COMPOSE="${COMPOSE:-deploy/docker-compose.yml}"
 KEEP_UP="${KEEP_UP:-0}"

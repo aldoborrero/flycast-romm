@@ -25,10 +25,11 @@ services:
       # accepts every request, and it runs as root inside this container.
       - BROKER_SECRET=${STREAMING_BROKER_SECRET:?set STREAMING_BROKER_SECRET}
 
-      # Must equal the path RomM's own library is mounted at. RomM sends the
-      # broker an absolute path derived from its LIBRARY_BASE_PATH and assumes
-      # this container sees the identical path; a mismatch 422s every launch.
-      - ROM_ROOT=/romm/library
+      # The paths RomM sends are <LIBRARY_BASE_PATH>/roms/<platform>/…, so the
+      # broker's root is the roms directory. RomM assumes this container sees
+      # the identical path; a mismatch 422s every launch. Keep this and the
+      # roms mount below in step.
+      - ROM_ROOT=/romm/library/roms
 
       # Fixed resolution. A stream that renegotiates its size mid-session
       # makes Flycast's window jump, and the Dreamcast's native 640x480 scales
@@ -56,7 +57,7 @@ services:
       # Dreamcast BIOS goes in ./flycast-config/.local/share/flycast/
       # (dc_boot.bin, dc_flash.bin); NAOMI and Atomiswave want naomi.zip and
       # awbios.zip in the same place.
-      - /srv/romm/library:/romm/library:ro
+      - /srv/romm/library/roms:/romm/library/roms:ro
 
     devices:
       # A GPU is not optional in practice. llvmpipe renders Dreamcast titles

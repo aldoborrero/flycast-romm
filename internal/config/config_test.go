@@ -39,8 +39,8 @@ func TestLoadDefaults(t *testing.T) {
 	if c.Port != 8000 {
 		t.Errorf("Port = %d, want the 8000 RomM assumes when broker_host omits one", c.Port)
 	}
-	if c.ROMRoot != "/romm/library" {
-		t.Errorf("ROMRoot = %q, want RomM's LIBRARY_BASE_PATH default", c.ROMRoot)
+	if c.ROMRoot != "/romm/library/roms" {
+		t.Errorf("ROMRoot = %q, want RomM's roms directory default", c.ROMRoot)
 	}
 	if c.SaveSlot != MaxSlot {
 		t.Errorf("SaveSlot = %d, want %d", c.SaveSlot, MaxSlot)

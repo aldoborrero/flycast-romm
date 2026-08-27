@@ -37,9 +37,9 @@ type Config struct {
 	Port   int
 	Secret string
 
-	// ROMRoot bounds every rom_path RomM sends. It must be the same path the
-	// RomM container mounts its library at; RomM derives the path from its own
-	// LIBRARY_BASE_PATH and assumes the broker sees it identically.
+	// ROMRoot bounds every rom_path RomM sends. RomM's paths are
+	// <LIBRARY_BASE_PATH>/roms/<platform>/…, so this is the roms directory, and
+	// the broker must see it at the same path RomM does.
 	ROMRoot string
 
 	FlycastBin string
@@ -95,7 +95,7 @@ func Load() (Config, error) {
 		// accepted so an operator can use whichever name they already have in
 		// their compose file.
 		Secret:     firstNonEmpty(os.Getenv("BROKER_SECRET"), os.Getenv("STREAMING_BROKER_SECRET")),
-		ROMRoot:    envStr("ROM_ROOT", "/romm/library"),
+		ROMRoot:    envStr("ROM_ROOT", "/romm/library/roms"),
 		FlycastBin: envStr("FLYCAST_BIN", "/opt/flycast/AppRun"),
 		ConfigDir:  envStr("FLYCAST_CONFIG_DIR", "/config/.config/flycast"),
 		DataDir:    envStr("FLYCAST_DATA_DIR", "/config/.local/share/flycast"),
