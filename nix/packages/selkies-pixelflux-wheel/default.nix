@@ -30,5 +30,9 @@ pkgs.python3Packages.buildPythonPackage {
 
   pythonImportsCheck = [ "pixelflux" ];
 
-  meta.description = "Selkies pixelflux (prebuilt manylinux wheel)";
+  meta = {
+    description = "Selkies pixelflux (prebuilt manylinux wheel)";
+    # prebuilt wheel bundles x264 (GPL)
+    license = pkgs.lib.licenses.mpl20;
+  };
 }

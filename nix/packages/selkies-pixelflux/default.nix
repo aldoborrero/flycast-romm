@@ -77,6 +77,10 @@ pkgs.python3Packages.buildPythonPackage rec {
     # MPL-2.0 for pixelflux itself; the bundled nvcodec-sys headers
     # (nvEncodeAPI.h) are proprietary NVIDIA, compiled only as committed
     # bindings (no NVIDIA build/link deps here).
-    license = pkgs.lib.licenses.mpl20;
+    # from-source links GPL x264 (x264-sys); the binary is effectively GPL
+    license = with pkgs.lib.licenses; [
+      mpl20
+      gpl2Plus
+    ];
   };
 }

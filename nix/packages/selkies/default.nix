@@ -1,14 +1,14 @@
 { pkgs, perSystem, ... }:
 let
   py = pkgs.python3Packages;
-  pixelflux  = perSystem.self.selkies-pixelflux-wheel;
-  pcmflux    = perSystem.self.selkies-pcmflux-wheel;
+  pixelflux = perSystem.self.selkies-pixelflux-wheel;
+  pcmflux = perSystem.self.selkies-pcmflux-wheel;
   pythonXlib = perSystem.self.selkies-python-xlib;
   # pynput propagates the vanilla python-xlib; override it to use the
   # selkies fork so there is only one python_xlib in the closure.
   pynput = py.pynput.override { python-xlib = pythonXlib; };
 in
-py.buildPythonPackage rec {
+py.buildPythonPackage {
   pname = "selkies";
   version = "0.0.0";
   pyproject = true;
@@ -27,9 +27,18 @@ py.buildPythonPackage rec {
       --replace-fail '    "python-xlib @ https://github.com/selkies-project/python-xlib/archive/master.zip",' ""
   '';
 
-  build-system = [ py.setuptools py.wheel ];
+  build-system = [
+    py.setuptools
+    py.wheel
+  ];
 
-  propagatedBuildInputs = [ pixelflux pcmflux pythonXlib pynput ] ++ (with py; [
+  propagatedBuildInputs = [
+    pixelflux
+    pcmflux
+    pythonXlib
+    pynput
+  ]
+  ++ (with py; [
     websockets
     gputil
     prometheus-client
@@ -60,5 +69,8 @@ py.buildPythonPackage rec {
     ${py.python.interpreter} -c "import selkies, Xlib"
   '';
 
-  meta.description = "Selkies streaming server (348bc4f), on prebuilt pixelflux/pcmflux wheels";
+  meta = {
+    description = "Selkies streaming server (348bc4f), on prebuilt pixelflux/pcmflux wheels";
+    license = pkgs.lib.licenses.mpl20;
+  };
 }

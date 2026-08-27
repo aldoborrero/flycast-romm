@@ -31,5 +31,8 @@ pkgs.stdenv.mkDerivation (finalAttrs: {
     ${pkgs.file}/bin/file $out/lib/selkies_joystick_interposer.so | grep -q "shared object"
   '';
 
-  meta.description = "LD_PRELOAD shim mapping browser gamepads to /dev/input/js*";
+  meta = {
+    description = "LD_PRELOAD shim mapping browser gamepads to /dev/input/js*";
+    license = pkgs.lib.licenses.mpl20;
+  };
 })

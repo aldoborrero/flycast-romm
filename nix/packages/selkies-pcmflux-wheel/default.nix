@@ -29,5 +29,8 @@ pkgs.python3Packages.buildPythonPackage {
 
   pythonImportsCheck = [ "pcmflux" ];
 
-  meta.description = "Selkies pcmflux (prebuilt manylinux wheel)";
+  meta = {
+    description = "Selkies pcmflux (prebuilt manylinux wheel)";
+    license = pkgs.lib.licenses.mpl20;
+  };
 }

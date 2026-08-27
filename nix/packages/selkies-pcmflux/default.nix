@@ -1,5 +1,5 @@
 { pkgs, ... }:
-pkgs.python3Packages.buildPythonPackage rec {
+pkgs.python3Packages.buildPythonPackage {
   pname = "pcmflux";
   version = "2.0.0";
   pyproject = true;
@@ -44,5 +44,8 @@ pkgs.python3Packages.buildPythonPackage rec {
 
   pythonImportsCheck = [ "pcmflux" ];
 
-  meta.description = "Selkies PulseAudio capture + Opus encode (Rust/PyO3)";
+  meta = {
+    description = "Selkies PulseAudio capture + Opus encode (Rust/PyO3)";
+    license = pkgs.lib.licenses.mpl20;
+  };
 }

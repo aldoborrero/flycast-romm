@@ -17,5 +17,8 @@ pkgs.python3Packages.buildPythonPackage {
 
   pythonImportsCheck = [ "Xlib" ];
 
-  meta.description = "Selkies fork of python-xlib";
+  meta = {
+    description = "Selkies fork of python-xlib";
+    license = pkgs.lib.licenses.lgpl21Plus;
+  };
 }
