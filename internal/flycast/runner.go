@@ -609,6 +609,9 @@ var (
 	passthroughPrefixes = []string{
 		"NVIDIA_", "__GL", "__NV", "__EGL", "LIBVA_", "MESA_", "VK_",
 		"GALLIUM_", "LIBGL_", "DRI_",
+		// GBM_BACKENDS_PATH points Mesa at its GBM backend; without it the
+		// compositor and Flycast fall back to software rendering.
+		"GBM_",
 	}
 )
 
