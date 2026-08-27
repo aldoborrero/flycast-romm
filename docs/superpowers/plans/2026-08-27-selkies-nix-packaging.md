@@ -4,7 +4,7 @@
 
 **Goal:** Package the rewritten Selkies streaming stack (pixelflux, pcmflux, the `selkies` wheel, the web UI, and the joystick interposer) as Nix flake packages that run headless on an AMD APU with H.264 VAAPI encode and a browser-embeddable stream.
 
-**Architecture:** Five flake packages under `nix/packages/`, auto-discovered by blueprint. Delivered in two phases: **F1** stands the whole chain up fast using pixelflux/pcmflux **prebuilt manylinux wheels** (the escape hatch LSIO itself uses) plus the wheel/web/interposer from source; **F2** replaces the two wheels with **from-source Rust derivations** and turns on VAAPI. WebRTC (F3) is a separate future plan. Target the LinuxServer-validated set: selkies `348bc4f` + pixelflux/pcmflux `2.0.0`.
+**Architecture:** Six flake packages under `nix/packages/` (pixelflux, pcmflux, the `selkies` wheel, the web `web_root`, the joystick interposer, and the python-xlib fork), auto-discovered by blueprint. Delivered in two phases: **F1** stands the whole chain up fast using pixelflux/pcmflux **prebuilt manylinux wheels** (the escape hatch LSIO itself uses) plus the wheel/web/interposer from source; **F2** replaces the two wheels with **from-source Rust derivations** and turns on VAAPI. WebRTC (F3) is a separate future plan. Target the LinuxServer-validated set: selkies `348bc4f` + pixelflux/pcmflux `2.0.0`.
 
 **Tech Stack:** Nix (blueprint flake, `buildPythonPackage`, `rustPlatform`/`setuptools-rust`, `buildNpmPackage`, `autoPatchelfHook`, `stdenv.mkDerivation`), Python 3, Rust, FFmpeg (≤8.1), Mesa/VAAPI, Wayland/Smithay.
 
@@ -25,7 +25,9 @@ nix/packages/
 ├── selkies-js-interposer/
 │   └── default.nix             # mkDerivation → selkies_joystick_interposer.so
 ├── selkies-web/
-│   └── default.nix             # buildNpmPackage → selkies_web/ static bundle
+│   └── default.nix             # buildNpmPackage → static web_root directory (served in #2)
+├── selkies-python-xlib/
+│   └── default.nix             # buildPythonPackage of the selkies python-xlib fork
 ├── selkies-pcmflux/
 │   └── default.nix             # buildPythonPackage + setuptools-rust (from source, F2)
 ├── selkies-pcmflux-wheel/
@@ -98,18 +100,23 @@ Run: `git -C .claude/code/selkies show 348bc4f61da66198573e7e57db9a266aca1991d5:
 - [ ] **Step 2: Write the real derivation**
 
 ```nix
-{ pkgs, flake, ... }:
+{ pkgs, ... }:
 pkgs.stdenv.mkDerivation (finalAttrs: {
   pname = "selkies-js-interposer";
-  version = "1.6.2-348bc4f";
+  version = "0-unstable-348bc4f";   # no own version upstream
   src = pkgs.fetchFromGitHub {
     owner = "selkies-project"; repo = "selkies";
     rev = "348bc4f61da66198573e7e57db9a266aca1991d5";
     hash = pkgs.lib.fakeHash;   # fill from first build
   };
   sourceRoot = "${finalAttrs.src.name}/addons/js-interposer";
-  # buildPhase/installPhase per the upstream Makefile — produce
-  # $out/lib/selkies_joystick_interposer.so
+  # The upstream Makefile is: gcc -shared -fPIC -o selkies_joystick_interposer.so
+  #   joystick_interposer.c -ldl  (confirm the exact target in Step 1)
+  buildPhase = ''
+    runHook preBuild
+    make all
+    runHook postBuild
+  '';
   installPhase = ''
     runHook preInstall
     install -Dm0644 selkies_joystick_interposer.so \
@@ -225,7 +232,7 @@ pkgs.python3Packages.buildPythonPackage {
   src = pkgs.python3Packages.fetchPypi {
     pname = "pcmflux"; version = "2.0.0";
     format = "wheel"; dist = "cp312"; python = "cp312";
-    abi = "cp312"; platform = "manylinux_2_35_x86_64"; # confirm exact tag from PyPI
+    abi = "cp312"; platform = "manylinux_2_28_x86_64"; # verified tag (cibuildwheel manylinux_2_28); wheels cp39–cp314
     hash = pkgs.lib.fakeHash;
   };
   nativeBuildInputs = [ pkgs.autoPatchelfHook ];
@@ -276,9 +283,13 @@ pkgs.python3Packages.buildPythonPackage rec {
   cargoDeps = pkgs.rustPlatform.importCargoLock {
     lockFile = "${src}/pixelflux/Cargo.lock";
     outputHashes = {
-      # "smithay-0.7.0" = lib.fakeHash;  # fill exact key+hash from build error
+      "smithay-0.7.0" = pkgs.lib.fakeHash;  # rev ca932e04…; fill exact key+hash from build error
     };
   };
+  # The manifest is nested at pixelflux/Cargo.toml, and setuptools-rust runs
+  # cargo from that subdir. cargoSetupHook vendors into $CARGO_HOME, but the
+  # nested manifest needs cargoRoot so the .cargo config lands where cargo looks.
+  cargoRoot = "pixelflux";
   nativeBuildInputs = with pkgs; [
     rustPlatform.cargoSetupHook rustc cargo
     python3Packages.setuptools-rust
@@ -286,7 +297,7 @@ pkgs.python3Packages.buildPythonPackage rec {
     llvmPackages.libclang
   ];
   buildInputs = with pkgs; [
-    ffmpeg_7  # pin ≤8.1; confirm the attr that gives 8.1.x (see step 4)
+    ffmpeg  # nixpkgs default is 8.1.2, satisfies ffmpeg-sys-next 8.1's ≤8.1 probe
     x264 libdrm mesa wayland wayland-protocols libinput libxkbcommon libva
   ];
   env.LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -304,11 +315,9 @@ pkgs.python3Packages.buildPythonPackage rec {
 Run: `nix build .#selkies-pixelflux -L`
 Expected sequence: (a) src hash mismatch → fill; (b) `importCargoLock` errors naming the exact `smithay-<ver>` key and its `got:` hash → add to `outputHashes`; rebuild.
 
-- [ ] **Step 4: Resolve the FFmpeg pin**
+- [ ] **Step 4: Confirm the FFmpeg version satisfies the probe**
 
-`ffmpeg-sys-next 8.1` probes "up to 8.1". Confirm which nixpkgs attr yields 8.1.x:
-Run: `nix eval --raw nixpkgs#ffmpeg.version` and `nixpkgs#ffmpeg_7.version`.
-Pick the attr that is ≤8.1 with `avcodec/avfilter/avutil`. If only >8.1 is available, pin via an overlay in this derivation and note it in the spec's risk 3.
+`ffmpeg-sys-next 8.1` probes "up to 8.1". Run: `nix eval --raw nixpkgs#ffmpeg.version` — expected `8.1.2`, a patch of 8.1 that satisfies the crate's major.minor probe, so plain `ffmpeg` is correct. Only if a future nixpkgs bumps to 8.2/9.0 do you pin an older attr via overlay (spec risk 3).
 
 - [ ] **Step 5: Build green**
 
@@ -339,43 +348,75 @@ Mirror of Task 3 for pixelflux — the manylinux wheel 2.0.0, so F1 can proceed 
 
 ---
 
-## Task 6: Web UI (`selkies_web` bundle)
+## Task 6: Web UI (static `web_root` directory)
 
-Reproduce `scripts/ci/build-web.sh`: build `selkies-web-core`, then `selkies-dashboard`, assemble the `selkies_web` bundle with its injected `__init__.py`. npm lockfiles are gitignored upstream → generate and pin per package.
+At `348bc4f` the web is **served from a `web_root` directory** (`settings.py:130`, default `/opt/selkies-web`), **not** bundled in the wheel — there is no `scripts/ci/build-web.sh` and no `selkies_web` package-data at this commit (that model is `main`-only). Reproduce **LSIO's `Dockerfile` build** instead: build `selkies-web-core`, then `selkies-dashboard` (copying `selkies-core.js` into it), and output the dashboard `dist/` as `$out`. npm lockfiles are gitignored → generate and pin per package.
 
 **Files:**
-- Read: `.claude/code/selkies/scripts/ci/build-web.sh`, `addons/selkies-web-core/package.json`, `addons/selkies-dashboard/package.json`
+- Read: `git -C .claude/code/docker-baseimage-selkies show master:Dockerfile` (the web build block, lines ~22-40), `git -C .claude/code/selkies show 348bc4f:addons/selkies-web-core/package.json` and `…:addons/selkies-dashboard/package.json`
 - Create: `nix/packages/selkies-web/default.nix`
-- Create: `nix/packages/selkies-web/{web-core,dashboard}-package-lock.json` (generated)
+- Create: the generated `package-lock.json`(s)
 
-- [ ] **Step 1: Generate lockfiles** — `npm install` each package in a scratch copy, save the `package-lock.json`s into the package dir.
-- [ ] **Step 2: Write `buildNpmPackage` (two-stage: core → dashboard) as failing build**, `npmDepsHash = lib.fakeHash`, `SELKIES_INJECT=1` on the dashboard build, then assemble:
+- [ ] **Step 1: Generate lockfiles** — in a scratch copy of `addons/selkies-web-core` and `addons/selkies-dashboard`, run `npm install`, save each `package-lock.json` into the package dir.
+
+- [ ] **Step 2: Write the build.** Two npm builds are involved (core, then dashboard which consumes `../selkies-web-core/dist/selkies-core.js`). Cleanest in Nix: a `selkies-web-core` sub-derivation (`buildNpmPackage`) whose `dist/` feeds a `selkies-dashboard` `buildNpmPackage`, each with its own `npmDepsHash`. The dashboard's `postConfigure` copies `${web-core}/selkies-core.js` into `src/`. Output:
 
 ```nix
-  # after both builds, replicate build-web.sh assembly:
   installPhase = ''
-    mkdir -p $out/selkies_web
-    cp -r addons/selkies-dashboard/dist/* $out/selkies_web/
-    # inject __init__.py so importlib.resources works on py3.9
-    touch $out/selkies_web/__init__.py
-    test -f $out/selkies_web/index.html
+    runHook preInstall
+    cp -r dist $out            # the served web_root
+    test -f $out/index.html
+    runHook postInstall
   '';
 ```
+No `SELKIES_INJECT`, no `__init__.py` — those are the `main` model.
 
-- [ ] **Step 3: Build; fill `npmDepsHash` for each package; rebuild** → `result/selkies_web/index.html` exists.
-- [ ] **Step 4: Commit** `feat(nix): build the selkies web UI bundle`
+- [ ] **Step 3: Build; fill `npmDepsHash` for each; rebuild** → `result/index.html` exists.
+
+- [ ] **Step 4: Commit** `feat(nix): build the selkies web_root directory`
+
+---
+
+## Task 6b: python-xlib fork
+
+At `348bc4f`, `selkies` depends on `python-xlib @ https://github.com/selkies-project/python-xlib/archive/master.zip` — the **selkies fork**, not PyPI's `xlib`. Package it so the wheel (Task 7) can take it as a normal input.
+
+**Files:**
+- Create: `nix/packages/selkies-python-xlib/default.nix`
+
+- [ ] **Step 1: Write the derivation**
+
+```nix
+{ pkgs, ... }:
+pkgs.python3Packages.buildPythonPackage {
+  pname = "python-xlib-selkies";
+  version = "0-unstable";
+  pyproject = true;
+  src = pkgs.fetchFromGitHub {
+    owner = "selkies-project"; repo = "python-xlib";
+    rev = "master";              # pin to a concrete rev in Step 2
+    hash = pkgs.lib.fakeHash;
+  };
+  build-system = [ pkgs.python3Packages.setuptools ];
+  pythonImportsCheck = [ "Xlib" ];
+}
+```
+
+- [ ] **Step 2: Pin a concrete rev, fill hash, build.** Resolve `master` to a commit SHA (`git ls-remote https://github.com/selkies-project/python-xlib master`), set it as `rev`, fill the hash → `import Xlib` PASS.
+
+- [ ] **Step 3: Commit** `feat(nix): package the selkies python-xlib fork`
 
 ---
 
 ## Task 7: The `selkies` wheel (assembly)
 
-The pure-Python wheel, taking pixelflux/pcmflux/web/interposer as arguments so F1 (wheels) and F2 (from source) swap by argument. Source: `selkies` at `348bc4f`. External Python deps at that commit: `aioice`, `av`, `cryptography` (≥44), `pyopenssl` (≥25), `pylibsrtp`, `pyee`, `aiohttp`, `aiofiles`, `uvloop`, `pulsectl-asyncio`, `msgpack`, `prometheus_client`, `psutil`, `watchdog`, `Pillow`, `dnspython`, `ifaddr`, `nvidia-ml-py`, `google-crc32c`, `cffi`. (`webrtc` is vendored — do NOT add aiortc.)
+The pure-Python wheel, taking pixelflux/pcmflux as arguments so F1 (wheels) and F2 (from source) swap by argument. Source: `selkies` at `348bc4f`. **Exact external deps at that commit** (from `git show 348bc4f:pyproject.toml`): `websockets`, `gputil`, `prometheus_client`, `msgpack`, `pynput`, `psutil`, `watchdog`, `Pillow`, `python-xlib` (the fork, Task 6b), `xkbcommon`, `distro`, `pulsectl`, `pasimple`, `aioice`, `av`, `cffi`, `cryptography>=44`, `google-crc32c`, `pyee`, `pylibsrtp`, `pyopenssl>=25`, `aiohttp`, `aiofiles`, plus `pixelflux`/`pcmflux`. **`webrtc` is vendored — do NOT add aiortc.** The web UI is NOT bundled here (Task 6 produces the `web_root`; #2 wires `--web_root`).
 
 **Files:**
 - Read: `git -C .claude/code/selkies show 348bc4f:pyproject.toml`
 - Create: `nix/packages/selkies/default.nix`
 
-- [ ] **Step 1: Write the derivation with pixelflux/pcmflux/web as overridable args**
+- [ ] **Step 1: Write the derivation with pixelflux/pcmflux as overridable args**
 
 ```nix
 { pkgs, perSystem, ... }:
@@ -383,7 +424,7 @@ let
   py = pkgs.python3Packages;
   pixelflux = perSystem.self.selkies-pixelflux-wheel;   # F1 default; F2 swaps to selkies-pixelflux
   pcmflux   = perSystem.self.selkies-pcmflux-wheel;
-  web       = perSystem.self.selkies-web;
+  pythonXlib = perSystem.self.selkies-python-xlib;
 in
 py.buildPythonPackage rec {
   pname = "selkies";
@@ -394,31 +435,32 @@ py.buildPythonPackage rec {
     rev = "348bc4f61da66198573e7e57db9a266aca1991d5";
     hash = pkgs.lib.fakeHash;
   };
-  # drop the two pins LSIO strips; the libs come from propagatedBuildInputs
+  # Drop the python-xlib URL form; it's satisfied from propagatedBuildInputs.
   postPatch = ''
-    cp -r ${web}/selkies_web src/selkies/selkies_web
+    substituteInPlace pyproject.toml \
+      --replace-fail '"python-xlib @ https://github.com/selkies-project/python-xlib/archive/master.zip",' ""
   '';
-  propagatedBuildInputs = [ pixelflux pcmflux ] ++ (with py; [
-    aioice av cryptography pyopenssl pylibsrtp pyee aiohttp aiofiles uvloop
-    pulsectl-asyncio msgpack prometheus-client psutil watchdog pillow
-    dnspython ifaddr nvidia-ml-py google-crc32c cffi
+  propagatedBuildInputs = [ pixelflux pcmflux pythonXlib ] ++ (with py; [
+    websockets gputil prometheus-client msgpack pynput psutil watchdog pillow
+    xkbcommon distro pulsectl pasimple aioice av cffi cryptography
+    google-crc32c pyee pylibsrtp pyopenssl aiohttp aiofiles
   ]);
   pythonImportsCheck = [ "selkies" ];
 }
 ```
 
-- [ ] **Step 2: Build; fill src hash; resolve any missing/renamed nixpkgs attrs**
+- [ ] **Step 2: Build; fill src hash; resolve nixpkgs attr names**
 
 Run: `nix build .#selkies -L`
-Expected friction: nixpkgs attr names (`prometheus-client` vs `prometheus_client`), and confirming `cryptography`/`pyopenssl` versions meet ≥44/≥25 (they do). Fix names until it resolves.
+Attr names verified present in nixpkgs (use these): `gputil` (lowercase — `GPUtil` does not exist), `pasimple` (0.0.2), `pulsectl` (24.12), `xkbcommon` (1.5.1), `distro` (1.9), `pynput` (1.8.2), `websockets`, `prometheus-client` (not `prometheus_client`). Floors met: `cryptography` 49 ≥44 ✓, `pyopenssl` 26.3 ≥25 ✓, `pylibsrtp` 1.0 ≥0.10 ✓, `pyee` 13 ≥13 ✓.
 
-- [ ] **Step 3: Verify the CLI and the web bundle**
+- [ ] **Step 3: Verify the CLI and the forked Xlib**
 
 ```nix
   doInstallCheck = true;
   installCheckPhase = ''
     $out/bin/selkies --help >/dev/null
-    test -f $out/${py.python.sitePackages}/selkies/selkies_web/index.html
+    ${py.python.interpreter} -c "import selkies, Xlib"
   '';
 ```
 Run: `nix build .#selkies -L` → PASS.
@@ -436,7 +478,7 @@ Prove the whole chain with software encode over WebSocket, before touching VAAPI
 
 - [ ] **Step 1: Write the smoke as a script**
 
-A script that: runs `selkies` with `PIXELFLUX_WAYLAND=true`, `SELKIES_USE_CPU=true`, `SELKIES_ENCODER=jpeg` (software), launches a throwaway Wayland client (`${pkgs.mesa-demos}/bin/eglgears_wayland` or `kmscube`) against the published `WAYLAND_DISPLAY`, and curls the Selkies HTTP port for a 200 + the web UI.
+A script that: runs `selkies --web_root ${selkies-web}` with `PIXELFLUX_WAYLAND=true` and software encode, launches a throwaway Wayland client (`${pkgs.mesa-demos}/bin/eglgears_wayland` or `kmscube`) against the published `WAYLAND_DISPLAY`, and curls the Selkies HTTP port for a 200 + `index.html`. **First confirm the exact software-encode flags at `348bc4f`**: `git -C .claude/code/selkies show 348bc4f:src/selkies/settings.py | grep -iE 'use_cpu|encoder|framerate'` — the reconnaissance names (`SELKIES_USE_CPU`, `SELKIES_ENCODER=jpeg`) were read from `main`; use whatever `settings.py` at `348bc4f` actually exposes.
 
 - [ ] **Step 2: Run it on rhea**
 

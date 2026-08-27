@@ -40,7 +40,7 @@ Commits pinned:
 
 ## 4. Components
 
-Five derivations, ordered by risk (de-risk the hardest first).
+Six derivations, ordered by risk (de-risk the hardest first).
 
 ### 4.1 pixelflux (Rust/PyO3) — critical path
 
@@ -62,16 +62,19 @@ Five derivations, ordered by risk (de-risk the hardest first).
 
 ### 4.3 selkies wheel (Python) — easy once 4.1–4.2 exist
 
-- Pure-Python `buildPythonPackage`. At `348bc4f`: `webrtc` (aiortc) is **vendored**, but **`aioice`, python-xlib and `av` are external** deps.
-- Required external Python inputs (floors from `348bc4f`, all met by current nixpkgs unless noted): `aioice>=0.10.1,<1.0.0`, `av`, `cryptography>=44` (nixpkgs 49 ✓), `pyopenssl>=25` (26.3 ✓), `pylibsrtp>=0.10` (1.0 ✓), `cffi`, `google-crc32c`, `pyee`, `aiohttp`, `aiofiles`, `uvloop`, `pulsectl-asyncio`, `msgpack`, `prometheus_client`, `psutil`, `watchdog`, `Pillow`, `dnspython`, `ifaddr`, `nvidia-ml-py`, plus `pixelflux`/`pcmflux`.
-- Console scripts: `selkies`, `selkies-resize` (`selkies-gpu-probe` only on newer commits).
-- **The web bundle must be a regular package** (`selkies/selkies_web/__init__.py` present) or `importlib.resources` fails on Python 3.9.
+- Pure-Python `buildPythonPackage`. At `348bc4f`: `webrtc` (aiortc) is **vendored**, but **`aioice`, `av` and python-xlib are external** deps.
+- **Exact `dependencies` at `348bc4f`** (verified from `git show 348bc4f:pyproject.toml` — an *older* pyproject than `main`): `websockets>=13`, `gputil`, `prometheus_client`, `msgpack`, `pynput`, `psutil`, `watchdog`, `Pillow`, **`python-xlib @ <selkies fork URL>`** (see 4.6), `pixelflux`, `pcmflux` (both unconstrained → 2.0.0), `xkbcommon`, `distro`, `pulsectl`, `pasimple`, `aioice>=0.10.1,<1.0.0`, `av`, `cffi`, `cryptography>=44` (nixpkgs 49 ✓), `google-crc32c`, `pyee>=13`, `pylibsrtp>=0.10` (1.0 ✓), `pyopenssl>=25` (26.3 ✓), `aiohttp>=3.7`, `aiofiles>=25.1`. **Not present at `348bc4f`** (these are `main`-only, and an earlier draft wrongly listed them): `uvloop`, `pulsectl-asyncio`, `dnspython`, `ifaddr`, `nvidia-ml-py`.
+- Console scripts: `selkies`, `selkies-resize` (no `selkies-gpu-probe` at this commit).
+- **The web UI is NOT bundled in the wheel at `348bc4f`** (that's `main`'s `selkies_web` model). The server serves files from a `web_root` directory (`settings.py:130`, default `/opt/selkies-web`), so the wheel and the web bundle (4.4) are independent; wiring `--web_root` to the web package is sub-project #2's job.
 
-### 4.4 web UI (npm/Vite)
+### 4.4 web UI (npm/Vite → a served directory, not a wheel bundle)
 
-- Three Vite packages under `addons/`: `selkies-web-core` (shared core), `selkies-dashboard` (React 19 — the one shipped), `selkies-dashboard-wish` (not shipped).
-- **npm lockfiles are gitignored** upstream (`npm install`, not `npm ci`). For Nix we must generate a lockfile and use an offline fetcher (`buildNpmPackage` + `npmDepsHash`) per package.
-- Pre-built `selkies-*-core.js` **are** committed; the final `selkies_web` dashboard `dist/` is **not** — it is produced by `scripts/ci/build-web.sh` (build core → build dashboard with `SELKIES_INJECT=1` → copy `dist` into `src/selkies/selkies_web` → inject `__init__.py`). We reproduce that, or carry a prebuilt `selkies_web` as the escape hatch.
+- Three Vite packages under `addons/`: `selkies-web-core` (shared core), `selkies-dashboard` (the shipped one), `selkies-dashboard-wish` (also built by LSIO). **npm lockfiles are gitignored** upstream → generate and pin per package (`buildNpmPackage` + `npmDepsHash`).
+- Build model at `348bc4f` (from LSIO's `Dockerfile`): `cd addons/selkies-web-core && npm install && npm run build`, then for each dashboard copy `../selkies-web-core/dist/selkies-core.js` into `src/`, `npm install && npm run build`, and collect `dist/` into an output dir. **The result is a static directory served via `web_root`**, not injected into the Python package. Our derivation produces `$out` = that static dir (the `selkies-dashboard` build), which #2 points `--web_root` at.
+
+### 4.6 python-xlib fork (Python) — the emulator-input dep
+
+- `348bc4f` declares `python-xlib @ https://github.com/selkies-project/python-xlib/archive/master.zip` — a **selkies fork**, not PyPI's `xlib`. `buildPythonPackage` cannot resolve a URL dep hermetically. Package the fork as its own derivation (`fetchFromGitHub selkies-project/python-xlib`) and inject it, and `postPatch` the wheel's `pyproject.toml` to drop the URL form (the dep is satisfied from `propagatedBuildInputs`). It provides the `Xlib` module the input path uses.
 
 ### 4.5 joystick interposer (C, `LD_PRELOAD`) — the emulator-critical bit
 
@@ -88,9 +91,10 @@ Five derivations, ordered by risk (de-risk the hardest first).
 nix/packages/selkies/
 ├── pixelflux/      # buildPythonPackage + setuptools-rust, committed cargo lock (vendor smithay git)
 ├── pcmflux/        # buildPythonPackage + setuptools-rust, generated cargo lock
-├── web/            # buildNpmPackage → selkies_web bundle
+├── web/            # buildNpmPackage → static web_root directory
 ├── js-interposer/  # mkDerivation → selkies_joystick_interposer.so
-└── default.nix     # the selkies wheel, wiring pixelflux + pcmflux + web + interposer
+├── python-xlib/    # buildPythonPackage of the selkies fork
+└── default.nix     # the selkies wheel, taking pixelflux + pcmflux + python-xlib (+ web via web_root in #2)
 ```
 
 Blueprint auto-discovers `nix/packages/`; each is a flake package (reusable/upstreamable), kept separate from sub-project #2's module.
@@ -104,7 +108,8 @@ Blueprint auto-discovers `nix/packages/`; each is a flake package (reusable/upst
 ## 8. Verification
 
 - **pixelflux/pcmflux:** `pythonImportsCheck = [ "pixelflux" "pcmflux" ]`; hermetic build (no network).
-- **wheel:** `selkies --help` runs; `selkies_web/index.html` present in the closure; `importlib.resources` finds `selkies.selkies_web`.
+- **wheel:** `selkies --help` runs; `import selkies` and `import Xlib` succeed (the fork).
+- **web:** the web package's `$out/index.html` exists (served via `--web_root` in #2).
 - **interposer:** the `.so` builds and exports the `js*` shim symbols.
 - **VAAPI (F2):** on rhea's AMD APU, `vainfo` shows `VAProfileH264*` enc entrypoints (already confirmed); a smoke run encodes a test surface via `h264_vaapi` without JPEG fallback.
 - **End-to-end (F1):** a throwaway Wayland client (e.g. a GL demo) rendered under **pixelflux's built-in compositor** is visible in a browser tab on the Selkies port, with a gamepad event passing through the interposer. Full Flycast wiring is sub-project #2.
