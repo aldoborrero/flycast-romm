@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -28,6 +29,31 @@ func sleepBin(t *testing.T) string {
 		t.Skipf("no sleep binary: %v", err)
 	}
 	return bin
+}
+
+// The broker forwards the operator's userspace GPU environment to Flycast so it
+// can render on hardware. GBM_BACKENDS_PATH in particular decides GPU vs
+// software rendering, so it must reach the emulator alongside the LIBVA/VK/EGL
+// knobs.
+func TestUserEnvPrefixForwardsGPUEnv(t *testing.T) {
+	t.Setenv("GBM_BACKENDS_PATH", "/gpu/gbm")
+	t.Setenv("LIBVA_DRIVERS_PATH", "/gpu/dri")
+	t.Setenv("__EGL_VENDOR_LIBRARY_DIRS", "/gpu/egl")
+	t.Setenv("VK_ICD_FILENAMES", "/gpu/icd.json")
+
+	r := NewRunner(config.Config{ConfigDir: t.TempDir(), User: "abc"}, discardLogger(), nil, nil)
+	got := strings.Join(r.userEnvPrefix(), " ")
+
+	for _, want := range []string{
+		"GBM_BACKENDS_PATH=/gpu/gbm",
+		"LIBVA_DRIVERS_PATH=/gpu/dri",
+		"__EGL_VENDOR_LIBRARY_DIRS=/gpu/egl",
+		"VK_ICD_FILENAMES=/gpu/icd.json",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("userEnvPrefix did not forward %q\ngot: %s", want, got)
+		}
+	}
 }
 
 // leftover spawns a process the way a dead broker would have left one behind:
