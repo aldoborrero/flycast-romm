@@ -118,7 +118,7 @@ Blueprint auto-discovers `nix/packages/`; each is a flake package (reusable/upst
 
 1. **`smithay` git-dep vendoring** — the top pixelflux risk; the committed `Cargo.lock` records the rev, but `outputHashes` must be supplied. Wheel escape hatch keeps F1 unblocked if it fights.
 2. **pcmflux has no committed lock** — must generate; a future upstream dep bump shifts it.
-3. **FFmpeg ceiling ≤8.1** — nixpkgs is 8.1.2 (ok); a future bump to 8.2/9.0 breaks the crate probe. Pin explicitly.
+3. **FFmpeg 9.0 (revised after T4 build)** — the flake-locked nixpkgs actually ships **ffmpeg 9.0**, past `ffmpeg-sys-next 8.1`'s named ceiling. Contrary to the earlier assumption, the crate does **not** break: it treats "> 8.1" as "has every API it knows", the build links `libavcodec.so.63` and `import pixelflux` passes. pixelflux only touches ~5.1-era avcodec/avfilter for `h264_vaapi`, so ABI risk is low. Residual risk is **runtime**, not build: the source build proves symbols resolve, not that the VAAPI encoder initializes — **F2 must exercise the real `h264_vaapi` encode on the GPU host**. A comment in the derivation documents how to pin an 8.1 ffmpeg attr if a future 9.x ABI change breaks it.
 4. **Python floors** — met for `348bc4f` (`cryptography>=44` vs nixpkgs 49; `pyopenssl>=25` vs 26.3; `pylibsrtp>=0.10` vs 1.0). **A bump to `main` would *not* be met** (`cryptography>=50`, `pyopenssl>=26`) → a `main` bump needs a `cryptography` override or nixpkgs advancing first. This is a concrete reason to hold at `348bc4f`.
 5. **npm builds with gitignored lockfiles** — generate and pin; Vite 8 + React 19 trees are large.
 6. **`main` vs `348bc4f` for WebRTC** — F3 may force a version bump *and* pull in the signaling/STUN/TURN plane; scoped as its own step.
