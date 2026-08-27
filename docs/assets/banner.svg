@@ -41,80 +41,11 @@
   <!-- Swirl glow halo (soft orange bloom behind the spiral) -->
   <ellipse cx="100" cy="100" rx="90" ry="90" fill="url(#swirl-glow)" clip-path="url(#bounds)"/>
 
-  <!--
-    Original Dreamcast-inspired spiral: four arcs that open outward,
-    rotated 0°, 90°, 180°, 270° around the centre (100, 100).
-    Each arc is a thick stroke tracing a 270° sweep from a tight inner
-    radius to a larger outer radius, giving the swirl-of-four look.
-    Drawn as SVG paths with stroke-linecap="round".
-  -->
-  <g transform="translate(100,100)" clip-path="url(#bounds)">
-
-    <!-- Arm 1 — top-right -->
-    <path d="
-      M 8,0
-      A 8,8 0 0,1 0,-8
-      A 20,20 0 0,1 14,-14
-      A 36,36 0 0,1 36,0
-      A 52,52 0 0,1 14,49
-    "
-      fill="none"
-      stroke="url(#arc-grad)"
-      stroke-width="9"
-      stroke-linecap="round"
-      opacity="0.95"
-    />
-
-    <!-- Arm 2 — bottom-right (rotate 90°) -->
-    <path d="
-      M 8,0
-      A 8,8 0 0,1 0,-8
-      A 20,20 0 0,1 14,-14
-      A 36,36 0 0,1 36,0
-      A 52,52 0 0,1 14,49
-    "
-      fill="none"
-      stroke="url(#arc-grad)"
-      stroke-width="9"
-      stroke-linecap="round"
-      opacity="0.95"
-      transform="rotate(90)"
-    />
-
-    <!-- Arm 3 — bottom-left (rotate 180°) -->
-    <path d="
-      M 8,0
-      A 8,8 0 0,1 0,-8
-      A 20,20 0 0,1 14,-14
-      A 36,36 0 0,1 36,0
-      A 52,52 0 0,1 14,49
-    "
-      fill="none"
-      stroke="url(#arc-grad)"
-      stroke-width="9"
-      stroke-linecap="round"
-      opacity="0.95"
-      transform="rotate(180)"
-    />
-
-    <!-- Arm 4 — top-left (rotate 270°) -->
-    <path d="
-      M 8,0
-      A 8,8 0 0,1 0,-8
-      A 20,20 0 0,1 14,-14
-      A 36,36 0 0,1 36,0
-      A 52,52 0 0,1 14,49
-    "
-      fill="none"
-      stroke="url(#arc-grad)"
-      stroke-width="9"
-      stroke-linecap="round"
-      opacity="0.95"
-      transform="rotate(270)"
-    />
-
-    <!-- Centre dot -->
-    <circle cx="0" cy="0" r="5" fill="#F45B00"/>
+  <g transform="translate(100,100)">
+    <circle cx="0" cy="0" r="42" fill="url(#arc-grad)" opacity="0.12"/>
+    <circle cx="0" cy="0" r="42" fill="none" stroke="url(#arc-grad)" stroke-width="4"/>
+    <circle cx="0" cy="0" r="20" fill="none" stroke="url(#arc-grad)" stroke-width="3" opacity="0.7"/>
+    <circle cx="0" cy="0" r="7" fill="#F45B00"/>
   </g>
 
   <!-- Vertical separator line -->
