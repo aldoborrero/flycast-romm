@@ -1,6 +1,13 @@
 { pkgs, ... }:
 let
-  inherit (pkgs) lib stdenv fetchFromGitHub fetchurl importNpmLock nodejs;
+  inherit (pkgs)
+    lib
+    stdenv
+    fetchFromGitHub
+    fetchurl
+    importNpmLock
+    nodejs
+    ;
 
   # Selkies source at the commit LSIO pins.
   selkiesSrc = fetchFromGitHub {
@@ -101,7 +108,7 @@ in
 # ---------------------------------------------------------------------------
 stdenv.mkDerivation {
   pname = "selkies-web";
-  version = "0-unstable-2024-07-02";  # approximate date of commit 348bc4f
+  version = "0-unstable-2024-07-02"; # approximate date of commit 348bc4f
 
   src = selkiesSrc + "/addons/selkies-dashboard";
 

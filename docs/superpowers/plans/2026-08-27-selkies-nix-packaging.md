@@ -11,6 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-08-27-selkies-nix-packaging-design.md`
 
 **Conventions for this plan:**
+
 - "TDD" here = write the verification first (a `passthru.tests` check or a `nix build` invocation that must fail for the right reason), then the derivation, then build green, then commit.
 - Hashes (`cargoHash`, `npmDepsHash`, wheel `sha256`, `outputHashes`) are discovered by building: start with `lib.fakeHash`, run the build, copy the real hash from the error, rebuild. Each such step says so.
 - All `nix` commands run from the worktree root. Reference @superpowers:test-driven-development for the discipline and @superpowers:verification-before-completion before any "done" claim.
@@ -47,6 +48,7 @@ Each directory is a blueprint package. The `selkies` package takes its pixelflux
 ## Task 0: Scaffold and confirm blueprint discovery
 
 **Files:**
+
 - Read: `flake.nix`, `nix/packages/docker-mod/default.nix` (learn the package signature blueprint passes: `{ pkgs, perSystem, flake, ... }`)
 - Create: `nix/packages/selkies-js-interposer/default.nix` (stub)
 
@@ -90,6 +92,7 @@ git commit -m "chore(nix): scaffold selkies-js-interposer package"
 The simplest real derivation — validates the package layout end to end. Source: `selkies` repo `addons/js-interposer` at `348bc4f`.
 
 **Files:**
+
 - Read: `.claude/code/selkies/addons/js-interposer/` (Makefile/sources; confirm the `.so` target and build command)
 - Modify: `nix/packages/selkies-js-interposer/default.nix`
 
@@ -136,6 +139,7 @@ Expected: `$out/lib/selkies_joystick_interposer.so` exists (`ls result/lib`).
 - [ ] **Step 4: Add a build-time check for the `.so`**
 
 Add to the derivation:
+
 ```nix
   doInstallCheck = true;
   installCheckPhase = ''
@@ -143,6 +147,7 @@ Add to the derivation:
     ${pkgs.file}/bin/file $out/lib/selkies_joystick_interposer.so | grep -q "shared object"
   '';
 ```
+
 Run: `nix build .#selkies-js-interposer -L` → PASS.
 
 - [ ] **Step 5: Commit**
@@ -159,6 +164,7 @@ git commit -m "feat(nix): package the selkies joystick interposer"
 The smaller of the two Rust/PyO3 pieces, and the one whose pattern pixelflux reuses. Doing it first proves the toolchain (Rust + PyO3 + `setuptools-rust` under `buildPythonPackage`) with the fewest moving parts — **no smithay git-dep, no FFmpeg, no bindgen**. Source: `linuxserver/pcmflux` at `ee3d8d3` (v2.0.0). No committed `Cargo.lock` → generate one.
 
 **Files:**
+
 - Read: `.claude/code/pcmflux/{pyproject.toml,setup.py,pcmflux/Cargo.toml}`
 - Create: `nix/packages/selkies-pcmflux/default.nix`
 - Create: `nix/packages/selkies-pcmflux/Cargo.lock` (generated)
@@ -170,6 +176,7 @@ cp -r .claude/code/pcmflux /tmp/pcmflux-lock && cd /tmp/pcmflux-lock/pcmflux
 cargo generate-lockfile
 cp Cargo.lock <worktree>/nix/packages/selkies-pcmflux/Cargo.lock
 ```
+
 (Uses the Rust from the devshell; the lock is committed for reproducibility.)
 
 - [ ] **Step 2: Write the derivation as the failing build**
@@ -219,6 +226,7 @@ git commit -m "feat(nix): build pcmflux from source"
 A parallel, low-risk path so F1 never blocks on the Rust builds. `autoPatchelfHook` over the PyPI manylinux wheel 2.0.0.
 
 **Files:**
+
 - Create: `nix/packages/selkies-pcmflux-wheel/default.nix`
 
 - [ ] **Step 1: Write the wheel derivation**
@@ -260,6 +268,7 @@ git commit -m "feat(nix): pcmflux manylinux wheel (F1 escape hatch)"
 The hard one. Source: `linuxserver/pixelflux` at `9d2caed` (v2.0.0). Has a **committed `Cargo.lock`** recording the `smithay` git dep at rev `ca932e04…` → use `cargoLock.lockFile` + `outputHashes`. Needs libclang (bindgen in `ffmpeg-sys-next`/`x264-sys`), FFmpeg ≤8.1, and the Wayland/DRM/VA stack. This task is where the wheel escape hatch earns its place: if it stalls, F1 proceeds on the wheel (Task 5) while this is finished.
 
 **Files:**
+
 - Read: `.claude/code/pixelflux/{pyproject.toml,setup.py,pixelflux/Cargo.toml,pixelflux/Cargo.lock}`
 - Create: `nix/packages/selkies-pixelflux/default.nix`
 
@@ -339,6 +348,7 @@ git commit -m "feat(nix): build pixelflux from source with vendored smithay + VA
 Mirror of Task 3 for pixelflux — the manylinux wheel 2.0.0, so F1 can proceed regardless of Task 4.
 
 **Files:**
+
 - Create: `nix/packages/selkies-pixelflux-wheel/default.nix`
 
 - [ ] **Step 1: Write the wheel derivation** (same shape as Task 3, with pixelflux's runtime `buildInputs`: `libva`, `libdrm`, `mesa`, `wayland`, `libxkbcommon`, `libGL`, `stdenv.cc.cc.lib`; NVENC/CUDA are dlopen — do not add).
@@ -353,6 +363,7 @@ Mirror of Task 3 for pixelflux — the manylinux wheel 2.0.0, so F1 can proceed 
 At `348bc4f` the web is **served from a `web_root` directory** (`settings.py:130`, default `/opt/selkies-web`), **not** bundled in the wheel — there is no `scripts/ci/build-web.sh` and no `selkies_web` package-data at this commit (that model is `main`-only). Reproduce **LSIO's `Dockerfile` build** instead: build `selkies-web-core`, then `selkies-dashboard` (copying `selkies-core.js` into it), and output the dashboard `dist/` as `$out`. npm lockfiles are gitignored → generate and pin per package.
 
 **Files:**
+
 - Read: `git -C .claude/code/docker-baseimage-selkies show master:Dockerfile` (the web build block, lines ~22-40), `git -C .claude/code/selkies show 348bc4f:addons/selkies-web-core/package.json` and `…:addons/selkies-dashboard/package.json`
 - Create: `nix/packages/selkies-web/default.nix`
 - Create: the generated `package-lock.json`(s)
@@ -369,6 +380,7 @@ At `348bc4f` the web is **served from a `web_root` directory** (`settings.py:130
     runHook postInstall
   '';
 ```
+
 No `SELKIES_INJECT`, no `__init__.py` — those are the `main` model.
 
 - [ ] **Step 3: Build; fill `npmDepsHash` for each; rebuild** → `result/index.html` exists.
@@ -382,6 +394,7 @@ No `SELKIES_INJECT`, no `__init__.py` — those are the `main` model.
 At `348bc4f`, `selkies` depends on `python-xlib @ https://github.com/selkies-project/python-xlib/archive/master.zip` — the **selkies fork**, not PyPI's `xlib`. Package it so the wheel (Task 7) can take it as a normal input.
 
 **Files:**
+
 - Create: `nix/packages/selkies-python-xlib/default.nix`
 
 - [ ] **Step 1: Write the derivation**
@@ -413,6 +426,7 @@ pkgs.python3Packages.buildPythonPackage {
 The pure-Python wheel, taking pixelflux/pcmflux as arguments so F1 (wheels) and F2 (from source) swap by argument. Source: `selkies` at `348bc4f`. **Exact external deps at that commit** (from `git show 348bc4f:pyproject.toml`): `websockets`, `gputil`, `prometheus_client`, `msgpack`, `pynput`, `psutil`, `watchdog`, `Pillow`, `python-xlib` (the fork, Task 6b), `xkbcommon`, `distro`, `pulsectl`, `pasimple`, `aioice`, `av`, `cffi`, `cryptography>=44`, `google-crc32c`, `pyee`, `pylibsrtp`, `pyopenssl>=25`, `aiohttp`, `aiofiles`, plus `pixelflux`/`pcmflux`. **`webrtc` is vendored — do NOT add aiortc.** The web UI is NOT bundled here (Task 6 produces the `web_root`; #2 wires `--web_root`).
 
 **Files:**
+
 - Read: `git -C .claude/code/selkies show 348bc4f:pyproject.toml`
 - Create: `nix/packages/selkies/default.nix`
 
@@ -463,6 +477,7 @@ Attr names verified present in nixpkgs (use these): `gputil` (lowercase — `GPU
     ${py.python.interpreter} -c "import selkies, Xlib"
   '';
 ```
+
 Run: `nix build .#selkies -L` → PASS.
 
 - [ ] **Step 4: Commit** `feat(nix): assemble the selkies wheel (F1, on wheels)`
@@ -474,6 +489,7 @@ Run: `nix build .#selkies -L` → PASS.
 Prove the whole chain with software encode over WebSocket, before touching VAAPI. This runs on rhea (the AMD box) or any Linux host with `/dev/dri`.
 
 **Files:**
+
 - Create: `nix/checks/selkies-smoke.nix` (or a `scripts/selkies-smoke.sh` run manually)
 
 - [ ] **Step 1: Write the smoke as a script**
