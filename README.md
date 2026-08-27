@@ -1,7 +1,14 @@
-# flycast-romm-integration
+<p align="center">
+  <img src="docs/assets/banner.svg" alt="flycast-romm — Stream Sega Dreamcast to RomM" width="860"/>
+</p>
 
-[![CI](https://github.com/aldoborrero/flycast-romm/actions/workflows/ci.yml/badge.svg)](https://github.com/aldoborrero/flycast-romm/actions/workflows/ci.yml)
-[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/aldoborrero/flycast-romm/actions/workflows/ci.yml"><img src="https://github.com/aldoborrero/flycast-romm/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPLv3-blue.svg" alt="License: GPLv3"/></a>
+  <a href="docs/GALLERY.md"><img src="https://img.shields.io/badge/gallery-screenshots-F45B00?logo=googlephotos&logoColor=white" alt="Gallery"/></a>
+</p>
+
+---
 
 A [LinuxServer Docker Mod](https://docs.linuxserver.io/general/container-customization)
 that lets [RomM](https://github.com/rommapp/romm) drive
@@ -345,6 +352,7 @@ emulators that wants a row too.
 
 ## Resources
 
+- [Screenshots gallery](docs/GALLERY.md) — in-browser stream, library view, save-state slots
 - [RomM](https://github.com/rommapp/romm) and its
   [emulator streaming docs](https://docs.romm.app/latest/using/emulator-streaming/)
 - [linuxserver/flycast](https://docs.linuxserver.io/images/docker-flycast/) and
