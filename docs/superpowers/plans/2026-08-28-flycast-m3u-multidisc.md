@@ -197,10 +197,12 @@ Edit `tests/CMakeLists.txt` — add after line 24 (`src/imgread/CueTest.cpp`):
 ```
         src/imgread/M3uTest.cpp
 ```
-Edit `core/imgread/CMakeLists.txt` — add `playlist.cpp` and `playlist.h` to the `target_sources` list (alphabetical, after `iso*`):
-```
+Edit `core/imgread/CMakeLists.txt` — the list currently closes its paren on the last entry (`isofs.h)` at line 12), so move the `)` off `isofs.h` and add the two files (alphabetical, after `isofs.h`). Result:
+```cmake
+        isofs.cpp
+        isofs.h
         playlist.cpp
-        playlist.h
+        playlist.h)
 ```
 
 - [ ] **Step 4: Create the header `core/imgread/playlist.h`**
@@ -260,7 +262,7 @@ nix-shell -p cmake ninja pkg-config gcc SDL2 curl zlib alsa-lib libevdev udev li
 cmake --build /home/aldo/Dev/aldoborrero/flycast-romm/.claude/code/flycast/build -j "$(nproc)" &&
 ctest --test-dir /home/aldo/Dev/aldoborrero/flycast-romm/.claude/code/flycast/build -R M3uTest --output-on-failure'
 ```
-Expected: all `M3uTest.*` parser cases PASS. If `hostfs::storage()` is uninitialized in the test binary, note that `test_stubs.cpp` (already in the test sources) provides the desktop stubs CueTest relies on; resolve entry paths the same way `cue.cpp` does so the same stubs cover it.
+Expected: all `M3uTest.*` parser cases PASS. Path resolution uses the **real** desktop `StdStorage`/`AllStorage` (`core/oslib/storage.cpp:167,192,371,379`) compiled into the flycast target the tests link into — there is no storage stub in `test_stubs.cpp`. This is the same infrastructure `CueTest`/`OpenDisc` exercise, so resolving entries exactly as `cue.cpp:78,181` does (`getParentPath`/`getSubPath`) means the same real storage covers `parseM3u`.
 
 - [ ] **Step 8: Commit**
 
@@ -537,9 +539,13 @@ Write the sidecar on save and remount on load, both guarded to regular numbered 
 
 - [ ] **Step 1: Write the sidecar in `dc_savestate` (`core/nullDC.cpp:181`)**
 
-Add `#include "imgread/playlist.h"` at the top. After `filename = hostfs::getSavestatePath(index, true);` is known for a regular slot, once the state file write has succeeded, write the sidecar when the guard holds:
+Add `#include "imgread/playlist.h"` at the top. After `filename = hostfs::getSavestatePath(index, true);` is known for a regular slot, once the state file write has succeeded (after `zipFile.Close()`/`free(data)`, before the final `return;` ~`nullDC.cpp:251`), write the sidecar when the guard holds.
+
+**IMPORTANT — `dc_savestate` is a `goto fail` function** (`goto fail;` at `nullDC.cpp:232,234,241,243` jump forward to the `fail:` label). C++ forbids a `goto` from crossing the initialization of a variable with a non-trivial initializer, so the sidecar's `std::string`/`hostfs::File*` locals **must** live inside their own `{ }` scope that opens *after* the last `goto fail;` and closes before `return;`. Without the braces the file will not compile (`error: jump to label 'fail' crosses initialization of 'std::string sidecar'`).
+
 ```cpp
     // Persist the active playlist disc alongside numbered-slot savestates.
+    // Own scope: keeps these non-trivial locals out of the goto-fail range above.
     if (index >= 0 && emu.currentDisc() >= 0 && emu.discList().size() > 1)
     {
         std::string sidecar = filename + ".disc";
@@ -552,7 +558,7 @@ Add `#include "imgread/playlist.h"` at the top. After `filename = hostfs::getSav
         }
     }
 ```
-(Place it where `filename` is in scope and the state write did not bail. `index == -2` uses the in-RAM path where `filename == "RAM"`, and the `index >= 0` guard already excludes it.)
+(`index == -2` uses the in-RAM path where `filename == "RAM"`, and the `index >= 0` guard already excludes it.)
 
 - [ ] **Step 2: Remount in `dc_loadstate` (`core/nullDC.cpp:264`, after `emu.loadstate(deser)` at :359)**
 
