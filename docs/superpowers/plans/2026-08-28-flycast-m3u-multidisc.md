@@ -31,7 +31,30 @@
 
 ---
 
-## Task 0: F0 — establish a green test build (infra gate, NO feature code)
+## Canonical build & test invocation (established by F0 — supersedes the `ctest` lines below)
+
+F0 proved these exact commands. **Two things differ from the naive `ctest` shown in the per-task steps and MUST be used instead:** the built `flycast` binary *is* the gtest runner (`ctest` only runs leaked vendored-dep cases, not ours), and the build needs two extra `-DUSE_*=OFF` flags. Every build/test step below runs inside the nix shell (needed for runtime shared libs too, not just compiling).
+
+```bash
+NIX='nix-shell -p cmake ninja pkg-config gcc SDL2 curl zlib alsa-lib libevdev udev libao --run'
+FLY=/home/aldo/Dev/aldoborrero/flycast-romm/.claude/code/flycast
+
+# Configure (once; re-run after editing any CMakeLists.txt):
+$NIX "cmake -B $FLY/build -G Ninja -DENABLE_CTEST=ON -DCMAKE_BUILD_TYPE=Release \
+  -DUSE_HOST_SDL=ON -DUSE_VULKAN=OFF -DUSE_LUA=OFF -DUSE_BREAKPAD=OFF -DUSE_PULSEAUDIO=OFF -S $FLY"
+
+# Build + run ONE suite (e.g. the new tests) — the flycast binary is the runner:
+$NIX "cmake --build $FLY/build -j\$(nproc) && $FLY/build/flycast --gtest_filter='M3uTest.*'"
+
+# Build + run the WHOLE suite offline (HttpTest needs network, filter it out):
+$NIX "cmake --build $FLY/build -j\$(nproc) && $FLY/build/flycast --gtest_filter=-HttpTest.*"
+```
+
+**Substitution rule for every task below:** wherever a step says `ctest … -R M3uTest`, run `$FLY/build/flycast --gtest_filter='M3uTest.*'`; wherever it says `ctest … --output-on-failure` (whole suite), run `$FLY/build/flycast --gtest_filter=-HttpTest.*`. Baseline from F0: 132 pass, 6 HttpTest skipped, 0 failures. Submodules (googletest, asio, libjuice, tinygettext, xbyak, libchdr, rcheevos, websocketpp, freetype, DreamPicoPort-API) are already initialized on the `feat/m3u-multidisc` branch.
+
+---
+
+## Task 0: F0 — establish a green test build (infra gate, NO feature code) ✅ DONE
 
 The spec flags this as the main infra risk: the whole emulator must compile with `-DENABLE_CTEST=ON` before any feature code is worth writing. Get the *existing* test suite green first, so later failures are unambiguously ours.
 
