@@ -19,7 +19,7 @@ A viability analysis (verified against the source) found the standalone **alread
 
 - **`Emulator::insertGdrom(path)`** (`core/emulator.cpp:1106`) → `gdr::insertDisk(path)` + `diskChange()`: mounts another disc hot, signals the GD-ROM "media change requested" at the ATA level, which the running game detects. This is the whole hot-swap path, and the standalone UI already calls it.
 - **`gdr::insertDisk` / `doDiscSwap` / `OpenDisc`** (`core/imgread/common.cpp:369,156,87`): open a chd/gdi/cdi/cue and mount it.
-- **UI already has manual disc-swap** (`core/ui/gui.cpp:620-631`): an in-game "Eject/Insert Disk" control that, on insert, sends the user to `GuiState::SelectDisk` to pick from the *entire* ROM library; the real `emu.insertGdrom(...)` call lives under that state at `gui.cpp:998-1006` (`:1001`). #423 adds a *shorter* path — a submenu of *this game's* discs that calls `insertGdrom` directly, modeled on that same call — leaving the whole-library picker untouched.
+- **UI already has manual disc-swap** (`core/ui/gui.cpp:620-631`): an in-game "Insert/Eject Disk" control that, on insert, sends the user to `GuiState::SelectDisk` to pick from the *entire* ROM library; the real `emu.insertGdrom(...)` call lives under that state at `gui.cpp:998-1006` (`:1001`). #423 adds a *shorter* path — a submenu of *this game's* discs that calls `insertGdrom` directly, modeled on that same call — leaving the whole-library picker untouched.
 - **Disc-parsing tests exist**: `tests/src/imgread/CueTest.cpp`, `GdiTest.cpp`, with fixtures in `tests/files/` — the natural home for a new `M3uTest.cpp`. `CueTest` calls `OpenDisc` directly; `M3uTest` follows that pattern.
 
 ## 3. Components (4 pieces, reusing the engine)
@@ -49,7 +49,7 @@ New helper in `core/imgread/` (beside `OpenDisc`). Ported from libretro's `read_
 
 ### 3.4 Disc-swap UI
 
-In `core/ui/gui.cpp`, beside the existing "Eject/Insert Disk" control (`gui.cpp:620`), show a submenu of the playlist's disc labels when `discPaths.size() > 1`. Selecting disc `i` calls `emu.insertGdrom(discPaths[i])` (the same call used at `gui.cpp:1001`) and sets `discIndex = i`. Reuses the existing pattern; no new engine call.
+In `core/ui/gui.cpp`, beside the existing "Insert/Eject Disk" control (`gui.cpp:620`), show a submenu of the playlist's disc labels when `discPaths.size() > 1`. Selecting disc `i` calls `emu.insertGdrom(discPaths[i])` (the same call used at `gui.cpp:1001`) and sets `discIndex = i`. Reuses the existing pattern; no new engine call.
 
 **Interaction with the existing whole-library picker:** the current "Insert Disk → SelectDisk → pick any ROM → `insertGdrom(game.path)`" path (`gui.cpp:1001`) does **not** know about `discPaths`, so a swap made through it leaves `discIndex` pointing at the wrong entry. Rather than track an out-of-band disc through the playlist, the submenu shows the active-disc marker (e.g. a check on `discIndex`) as a hint only, and a manual whole-library swap sets `discIndex = -1` ("not one of the playlist discs") so the marker simply disappears instead of lying. No functional breakage either way — this is purely the correctness of the "which disc is in the drive" indicator.
 
@@ -94,7 +94,7 @@ In `core/ui/gui.cpp`, beside the existing "Eject/Insert Disk" control (`gui.cpp:
 
 Recorded here so the follow-up starts with the analysis already done:
 
-- **Where the index lives:** put `discIndex` (and enough to repopulate `discPaths`) somewhere reachable from `common.cpp` without an `Emulator` handle — e.g. a field on the global `settings.content`, serialized under a version guard. Do **not** widen `libGDR_serialize`'s responsibility across the libretro boundary without confirming the libretro core round-trips the same field, since the savestate version enum (`serialize.h`, `Current=V59`) is global to both frontends.
+- **Where the index lives:** put `discIndex` (and enough to repopulate `discPaths`) somewhere reachable from `common.cpp` without an `Emulator` handle — e.g. a field on the global `settings.content`, serialized under a version guard. Do **not** widen `libGDR_serialize`'s responsibility across the libretro boundary without confirming the libretro core round-trips the same field, since the savestate version enum (`core/serialize.h`, `Current=V59`) is global to both frontends.
 - **Active remount on load:** deserialize must, if the persisted disc differs from what is mounted, call the hot-swap (`insertGdrom(discPaths[discIndex])`) rather than assume the drive already holds the right disc — a state can be loaded cold, with `discPaths` empty, so the load path must be able to repopulate the playlist first.
 - **Thread-safety:** the deferred/scheduled nature of the swap (`sh4_sched_request`, `common.cpp:379`) means a swap kicked off from deserialize must be sequenced safely relative to the rest of state restore; this is the extra risk that justified splitting it out.
 - **Backward compat:** older states (absent field) must load and keep disc 0 / the currently mounted disc.
@@ -104,5 +104,5 @@ Recorded here so the follow-up starts with the analysis already done:
 - Issue: flyinghead/flycast#423.
 - libretro model: `shell/libretro/libretro.cpp` (`read_m3u` :3866, `init_disk_control_interface` :3835, `retro_set_image_index` :3728, `retro_set_eject_state` :3698).
 - Engine: `core/emulator.cpp` (`loadGame` :562, `insertGdrom` :1106, `openGdrom` :1114, `unloadGame` :743); `core/imgread/common.cpp` (`OpenDisc` :87, `doDiscSwap` :156, `gdr::insertDisk` :369, `libGDR_serialize` :396); `core/oslib/storage.h` (`getParentPath`/`getSubPath` :132-133).
-- UI: `core/ui/gui.cpp` (Eject/Insert control :620, SelectDisk insert :998-1006/:1001).
+- UI: `core/ui/gui.cpp` (Insert/Eject control :620, SelectDisk insert :998-1006/:1001).
 - Tests: `tests/CMakeLists.txt` (:10 sources into the flycast target), `tests/src/imgread/{CueTest,GdiTest}.cpp`, `tests/files/`.
