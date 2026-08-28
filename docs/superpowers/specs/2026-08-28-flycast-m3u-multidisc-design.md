@@ -59,8 +59,8 @@ In `core/ui/gui.cpp`, beside the existing "Insert/Eject Disk" control (`gui.cpp:
 
 Persist the active disc **outside** the savestate binary, mirroring how RetroArch does it via `retro_set_initial_image` (`libretro.cpp:2311-2320,3790`): store **both index and path**, and on load only remount if the stored path still matches the playlist entry.
 
-- **Save** (`dc_savestate`, `nullDC.cpp:181`): after `filename = hostfs::getSavestatePath(index, true)`, if a playlist is active (`discPaths` non-empty and `discIndex >= 0`), write a sidecar `<filename>.disc` containing `discIndex` and `discPaths[discIndex]`. No sidecar for single-disc games or an out-of-playlist manual disc (`discIndex == -1`).
-- **Load** (`dc_loadstate`, `nullDC.cpp:264`): after `emu.loadstate(deser)` (`:359`) restores the machine, read `<filename>.disc`; if present and its stored path equals `discPaths[storedIndex]` (guard against a reordered/changed playlist, exactly as libretro's `disk_paths[...].compare(disk_initial_path)` at `libretro.cpp:2317`), and that disc differs from what is mounted, call `emu.insertGdrom(discPaths[storedIndex])` and set `discIndex = storedIndex`.
+- **Save** (`dc_savestate`, `nullDC.cpp:181`): guarded to regular numbered slots (`index >= 0`) — the reserved negative slots have no on-disk `.state` to sidecar (§8). After `filename = hostfs::getSavestatePath(index, true)`, if a playlist is active (`discPaths` non-empty and `discIndex >= 0`), write a sidecar `<filename>.disc` containing `discIndex` and `discPaths[discIndex]`. No sidecar for single-disc games or an out-of-playlist manual disc (`discIndex == -1`).
+- **Load** (`dc_loadstate`, `nullDC.cpp:264`): also guarded by `index >= 0`. After `emu.loadstate(deser)` (`:359`) restores the machine, read `<filename>.disc`; if present and its stored path equals `discPaths[storedIndex]` (guard against a reordered/changed playlist, exactly as libretro's `disk_paths[...].compare(disk_initial_path)` at `libretro.cpp:2317`), and that disc differs from what is mounted, call `emu.insertGdrom(discPaths[storedIndex])` and set `discIndex = storedIndex`. The `index >= 0` guard matters because `emu.loadstate` at `:359` also runs for `index == -1`; without it the code path would be reached (though no sidecar exists there anyway — see §8).
 - **Why after `emu.loadstate`, not inside serialize:** the remount runs in the standalone frontend flow, on the same thread and via the same `insertGdrom` a manual UI swap uses — so it inherits the existing swap's timing/scheduling behaviour and needs no reasoning about `sh4_sched` ordering *during* deserialize.
 - **Backward compatible for free:** an older savestate has no sidecar → nothing is remounted → today's behaviour. Touches neither `libGDR_serialize` nor the global savestate version (`core/serialize.h`, `Current=V59`), so libretro is unaffected.
 
@@ -73,8 +73,8 @@ Persist the active disc **outside** the savestate binary, mirroring how RetroArc
 | Hot-swap engine | `Emulator::insertGdrom` (`emulator.cpp:1106`) | **reuse, 0 LOC** |
 | Disc-swap submenu | `core/ui/gui.cpp:620` (control site); call modeled on `gui.cpp:998-1006`/`:1001` | add playlist submenu that calls `emu.insertGdrom(discPaths[i])` directly |
 | Manual-picker desync | `core/ui/gui.cpp:1001` | set `discIndex = -1` on a whole-library swap |
-| Write disc sidecar | `dc_savestate` (`core/nullDC.cpp:181`) | after `getSavestatePath`, write `<state>.disc` when a playlist is active |
-| Remount on load | `dc_loadstate` (`core/nullDC.cpp:264`, after `emu.loadstate` at `:359`) | read `<state>.disc`, verify path, `insertGdrom` if it differs |
+| Write disc sidecar | `dc_savestate` (`core/nullDC.cpp:181`) | guard `index >= 0`; after `getSavestatePath`, write `<state>.disc` when a playlist is active |
+| Remount on load | `dc_loadstate` (`core/nullDC.cpp:264`, after `emu.loadstate` at `:359`) | guard `index >= 0`; read `<state>.disc`, verify path, `insertGdrom` if it differs |
 | Clear playlist | `unloadGame` (`emulator.cpp:743`) | reset `discPaths`/`discIndex` |
 
 ## 5. Testing
@@ -101,8 +101,9 @@ Persist the active disc **outside** the savestate binary, mirroring how RetroArc
 
 ## 8. Out of scope
 
-- **Quicksave-in-RAM disc persistence** (`dc_savestate`/`dc_loadstate` `index == -2`, the `HAS_FMEMOPEN` in-RAM buffer): there is no on-disk `.state` file to sidecar. The playlist still lives in `emu` for the session, so an in-RAM quickload rarely needs a remount; covering it (e.g. a RAM-side index snapshot) is a follow-up, documented as a known gap.
-- **GGPO netplay savestates** (`index == -1`, rollback states whose MD5 drives peer sync): disc-swap across a netplay session is a separate concern; a sidecar does not enter the state MD5. Out of scope, documented.
+- **The reserved negative savestate slots (`index < 0`) carry no `.disc` sidecar**, which is why the write and read are guarded by `index >= 0` (§3.5). The only two negative slots are:
+  - `index == -2` — the `HAS_FMEMOPEN` **in-RAM quicksave** buffer (`nullDC.cpp:205,273`): no on-disk `.state` file to sidecar. The playlist still lives in `emu` for the session, so an in-RAM quickload rarely needs a remount; covering it (e.g. a RAM-side index snapshot) is a follow-up, documented as a known gap.
+  - `index == -1` — the **GGPO initial net-sync load at game start** (`core/emulator.cpp:681`, `dc_loadstate(-1)` under `config::GGPOEnable`, reading `<name>.state.net`), whose peer-sync MD5 is computed at `nullDC.cpp:308-314`. Note this is *not* rollback: GGPO rollback save/load bypasses `dc_savestate`/`dc_loadstate` entirely and calls `dc_serialize`/`dc_deserialize` directly (`core/network/ggpo.cpp:315,349`), so the sidecar can never touch rollback. And `dc_savestate(-1)` is never called anywhere in `core/`, so no sidecar is ever written for a negative slot; disc-swap persistence across netplay is a separate concern, out of scope.
 - Non-Dreamcast platforms (NAOMI/Atomiswave are single-image; `.m3u` is a disc-based-console concern).
 - Changing the existing "pick from whole library" disc picker (kept as-is; the playlist submenu is additive).
 - The webstation-broker `.m3u` workaround and the RomM `_EMULATOR_CAPABILITIES` entry (separate contributions; this upstream fix would eventually make the webstation workaround unnecessary).
@@ -112,6 +113,6 @@ Persist the active disc **outside** the savestate binary, mirroring how RetroArc
 - Issue: flyinghead/flycast#423.
 - libretro model: `shell/libretro/libretro.cpp` (`read_m3u` :3866, `init_disk_control_interface` :3835, `retro_set_image_index` :3728, `retro_set_eject_state` :3698, `retro_set_initial_image` :3790, initial-image restore with path-match guard :2311-2320).
 - Engine: `core/emulator.cpp` (`loadGame` :562, `insertGdrom` :1106, `openGdrom` :1114, `unloadGame` :743, global `emu` :1144); `core/emulator.h` (`extern Emulator emu` :223); `core/imgread/common.cpp` (`OpenDisc` :87, `doDiscSwap` :156, `gdr::insertDisk` :369, `libGDR_serialize` :396); `core/oslib/storage.h` (`getParentPath`/`getSubPath` :132-133).
-- Savestate (standalone): `core/nullDC.cpp` (`dc_savestate` :181, `dc_loadstate` :264, `emu.loadstate` :359); `core/oslib/oslib.cpp` (`getSavestatePath` :198); `core/serialize.h` (`Current=V59`).
+- Savestate (standalone): `core/nullDC.cpp` (`dc_savestate` :181, `dc_loadstate` :264, `index == -2` RAM slot :205/:273, GGPO net-sync MD5 :308-314, `emu.loadstate` :359); `core/oslib/oslib.cpp` (`getSavestatePath` :198); `core/emulator.cpp` (GGPO `dc_loadstate(-1)` at boot :681); `core/network/ggpo.cpp` (rollback `dc_deserialize`/`dc_serialize` :315,349, bypassing the standalone save/load path); `core/serialize.h` (`Current=V59` :79).
 - UI: `core/ui/gui.cpp` (Insert/Eject control :620, SelectDisk insert :998-1006/:1001).
 - Tests: `tests/CMakeLists.txt` (:10 sources into the flycast target), `tests/src/imgread/{CueTest,GdiTest}.cpp`, `tests/files/`.
