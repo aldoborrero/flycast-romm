@@ -573,6 +573,12 @@ func (r *Runner) userEnvPrefix() []string {
 		// Tells the Lua script where the command channel lives, so the two
 		// halves cannot disagree if FLYCAST_CONFIG_DIR is overridden.
 		"ROMM_BROKER_CHANNEL": r.cfg.ChannelDir(),
+		// Default SDL's audio backend to PulseAudio. The broker is built around
+		// Pulse (pactl, PULSE_RUNTIME_PATH, the null sink); left unset, SDL picks
+		// ALSA — which has no device in the container — and Flycast boots
+		// "running without audio". An operator can still override this through
+		// the SDL_AUDIODRIVER passthrough below.
+		"SDL_AUDIODRIVER": "pulseaudio",
 	}
 	// Forward the GPU knobs an operator set on the container, plus the
 	// joystick interposer the base image relies on for controller input.
@@ -605,6 +611,10 @@ var (
 	passthroughEnv = []string{
 		"LD_PRELOAD", "LD_LIBRARY_PATH", "DRINODE", "XDG_DATA_DIRS",
 		"SDL_VIDEODRIVER", "SDL_AUDIODRIVER",
+		// PATH so the `sudo -u abc env … pactl` prefix resolves pactl from the
+		// broker's own PATH (e.g. the nix wrapper's), not sudo's secure_path
+		// which hides a store-only pactl.
+		"PATH",
 	}
 	passthroughPrefixes = []string{
 		"NVIDIA_", "__GL", "__NV", "__EGL", "LIBVA_", "MESA_", "VK_",

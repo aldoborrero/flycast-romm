@@ -56,6 +56,40 @@ func TestUserEnvPrefixForwardsGPUEnv(t *testing.T) {
 	}
 }
 
+func TestUserEnvPrefixDefaultsSDLAudioDriverToPulse(t *testing.T) {
+	r := NewRunner(config.Config{ConfigDir: t.TempDir(), User: "abc"}, discardLogger(), nil, nil)
+	got := strings.Join(r.userEnvPrefix(), " ")
+
+	if !strings.Contains(got, "SDL_AUDIODRIVER=pulseaudio") {
+		t.Errorf("userEnvPrefix did not default SDL_AUDIODRIVER=pulseaudio; "+
+			"SDL falls back to ALSA and Flycast boots without audio\ngot: %s", got)
+	}
+}
+
+func TestUserEnvPrefixRespectsSDLAudioDriverOverride(t *testing.T) {
+	t.Setenv("SDL_AUDIODRIVER", "dummy")
+
+	r := NewRunner(config.Config{ConfigDir: t.TempDir(), User: "abc"}, discardLogger(), nil, nil)
+	got := strings.Join(r.userEnvPrefix(), " ")
+
+	if !strings.Contains(got, "SDL_AUDIODRIVER=dummy") {
+		t.Errorf("operator override of SDL_AUDIODRIVER not respected\ngot: %s", got)
+	}
+}
+
+func TestUserEnvPrefixForwardsPATH(t *testing.T) {
+	t.Setenv("PATH", "/nix/store/pulseaudio/bin:/usr/bin")
+
+	r := NewRunner(config.Config{ConfigDir: t.TempDir(), User: "abc"}, discardLogger(), nil, nil)
+	got := strings.Join(r.userEnvPrefix(), " ")
+
+	// pactl runs as `sudo -u abc env <vars> pactl`; without PATH forwarded,
+	// env resolves against sudo's secure_path and cannot find the nix pactl.
+	if !strings.Contains(got, "PATH=/nix/store/pulseaudio/bin:/usr/bin") {
+		t.Errorf("userEnvPrefix did not forward PATH; env cannot resolve pactl\ngot: %s", got)
+	}
+}
+
 // leftover spawns a process the way a dead broker would have left one behind:
 // its own session and group, reparented to nobody the runner knows. The
 // returned channel closes once the process has been reaped, which is when
