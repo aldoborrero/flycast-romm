@@ -11,6 +11,15 @@ pkgs.python3Packages.buildPythonPackage rec {
     hash = "sha256-LSZ7p6tnT6bWJ34jyIJ0LBGdY+PmndfP91l1a7hu36E=";
   };
 
+  # Drain Smithay's deferred texture-destruction queue while capture is stopped.
+  # When no WebRTC client is connected the render tick early-outs without
+  # finishing a Frame, so imported GPU buffers from the still-rendering nested
+  # clients (Flycast's idle game list) are never released until the next
+  # start_capture() — an idle session grows unbounded. On the AMD iGPU these
+  # buffers are system RAM, so it surfaces as RSS growth and OOM.
+  # Upstream bug with no merged fix yet: linuxserver/pixelflux#26 (smithay#1747).
+  patches = [ ./wayland-idle-texture-leak.patch ];
+
   # The Rust manifest lives under pixelflux/ (nested), so cargoSetupHook and
   # setuptools-rust are both pointed at that subdir. Upstream commits its
   # Cargo.lock, so we vendor straight from it — no generation or postPatch.

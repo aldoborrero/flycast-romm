@@ -1,7 +1,11 @@
 { pkgs, perSystem, ... }:
 let
   py = pkgs.python3Packages;
-  pixelflux = perSystem.self.selkies-pixelflux-wheel;
+  # Source-built (not the wheel) to carry the idle texture-destruction leak fix
+  # for the Wayland/Smithay capture backend — linuxserver/pixelflux#26. The
+  # prebuilt wheel has no released fix, so an idle capture session grows RSS
+  # unbounded until OOM. See selkies-pixelflux/wayland-idle-texture-leak.patch.
+  pixelflux = perSystem.self.selkies-pixelflux;
   pcmflux = perSystem.self.selkies-pcmflux-wheel;
   pythonXlib = perSystem.self.selkies-python-xlib;
   # pynput propagates the vanilla python-xlib; override it to use the
@@ -70,7 +74,12 @@ py.buildPythonPackage {
   '';
 
   meta = {
-    description = "Selkies streaming server (348bc4f), on prebuilt pixelflux/pcmflux wheels";
-    license = pkgs.lib.licenses.mpl20;
+    description = "Selkies streaming server (348bc4f); source-built pixelflux (leak fix #26), prebuilt pcmflux wheel";
+    # selkies itself is MPL-2.0, but the source-built pixelflux links GPL x264,
+    # making the streaming closure effectively GPL2+.
+    license = with pkgs.lib.licenses; [
+      mpl20
+      gpl2Plus
+    ];
   };
 }
