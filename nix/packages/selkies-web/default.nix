@@ -22,7 +22,7 @@ let
   # `master`; we pin by hash to keep builds reproducible.
   sdlGameControllerDB = fetchurl {
     url = "https://raw.githubusercontent.com/mdqinc/SDL_GameControllerDB/master/gamecontrollerdb.txt";
-    hash = "sha256-rqEVIPwTg8nuTW8dP5H9Xc6B8aZuks7wBIUGXmwibwY=";
+    hash = "sha256-4KqcGDzxcg0hq/Ujm7xvtExucLxc4qUleBHEPzVBorM=";
   };
 
   # ---------------------------------------------------------------------------

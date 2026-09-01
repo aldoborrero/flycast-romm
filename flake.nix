@@ -38,6 +38,17 @@
       shallow = true;
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Provisions the flycast-smoke LXC (a bare Debian container with Nix on
+    # top): the whole capture stack — weston, the patched selkies, pulseaudio,
+    # caddy and the broker — as system-manager systemd services, so the launch
+    # is a committed config instead of hand-run one-shots.
+    system-manager = {
+      type = "git";
+      url = "https://github.com/numtide/system-manager";
+      shallow = true;
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
