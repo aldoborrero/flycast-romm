@@ -6,10 +6,10 @@
 # Stack, in start order:
 #   flycast-xdg   oneshot: create the XDG_RUNTIME_DIR the rest share
 #   flycast-pulse pulseaudio with a null sink (selkies/pcmflux captures its monitor)
-#   flycast-weston headless GL compositor -> wayland-1
-#   flycast-selkies the PATCHED selkies (source-built pixelflux, leak fix #26),
-#                  PIXELFLUX_WAYLAND=true so it takes the Wayland capture path and
-#                  never shells out to xrandr (the X11 path aborts video here)
+#   flycast-selkies the PATCHED selkies (source-built pixelflux, leak fix #26).
+#                  pixelflux is ALSO the headless-GPU Wayland compositor (wayland-1);
+#                  flycast renders into it. PIXELFLUX_WAYLAND=true so it takes the
+#                  Wayland path and never shells out to xrandr (X11 path aborts video)
 #   flycast-broker the RomM broker; spawns flycast per /launch request
 #   flycast-caddy  TLS front on :8443, serves the web UI and proxies the ws to selkies
 #
@@ -44,6 +44,11 @@ let
   hostIp = "192.168.120.216";
 
   runtimeDir = "/run/xdg";
+  # pixelflux is itself the (headless-GPU, on renderD128) Wayland compositor;
+  # selkies calls ensure_wayland_display and, on a clean XDG_RUNTIME_DIR, it
+  # lands on wayland-1. flycast must render into THAT. The original setup ran a
+  # separate weston that stole wayland-1, bumping pixelflux to wayland-2 while
+  # flycast rendered into the (uncaptured) weston — hence a black stream.
   waylandDisplay = "wayland-1";
   driNode = "/dev/dri/renderD128";
   romRoot = "/romm/library/roms";
@@ -110,7 +115,6 @@ in
       wl-clipboard
       pulseaudio
       caddy
-      weston
       flycast
     ];
 
@@ -145,25 +149,13 @@ in
         '';
       };
 
-      flycast-weston = mkService {
-        description = "flycast-smoke: headless weston compositor (wayland-1)";
-        after = [ "flycast-xdg.service" ];
-        requires = [ "flycast-xdg.service" ];
-        environment = glEnv // { HOME = flycastHome; };
-        serviceConfig.ExecStart = ''
-          ${pkgs.weston}/bin/weston --backend=headless --renderer=gl \
-            --socket=${waylandDisplay} --width=1280 --height=720
-        '';
-      };
-
       flycast-selkies = mkService {
-        description = "flycast-smoke: selkies streaming (patched pixelflux, leak fix #26)";
-        after = [ "flycast-weston.service" "flycast-pulse.service" ];
-        requires = [ "flycast-weston.service" ];
+        description = "flycast-smoke: selkies streaming + pixelflux compositor (leak fix #26)";
+        after = [ "flycast-xdg.service" "flycast-pulse.service" ];
+        requires = [ "flycast-xdg.service" ];
         path = [ pkgs.xclip pkgs.wl-clipboard ];
         environment = glEnv // {
           HOME = flycastHome;
-          WAYLAND_DISPLAY = waylandDisplay;
           # Take the Wayland capture path; without this selkies uses xrandr to
           # find the screen and aborts the video pipeline on this headless host.
           PIXELFLUX_WAYLAND = "true";
@@ -179,8 +171,9 @@ in
 
       flycast-broker = mkService {
         description = "flycast-smoke: RomM streaming broker";
-        after = [ "flycast-weston.service" "flycast-pulse.service" ];
-        requires = [ "flycast-weston.service" ];
+        # flycast connects to pixelflux's compositor, so selkies must be up first.
+        after = [ "flycast-selkies.service" "flycast-pulse.service" ];
+        requires = [ "flycast-selkies.service" ];
         # LD_LIBRARY_PATH is deliberately dropped here (see flycastWrapped); with
         # it set, the Debian sudo the broker shells out to fails to load.
         environment = (removeAttrs glEnv [ "LD_LIBRARY_PATH" ]) // {
