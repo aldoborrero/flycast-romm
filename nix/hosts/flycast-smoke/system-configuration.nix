@@ -196,10 +196,23 @@ in
           PULSE_RUNTIME_PATH = "${runtimeDir}/pulse";
         };
         serviceConfig = {
-          # flycast loads romm-broker.lua from its config dir; ship it there.
-          ExecStartPre = ''
+          ExecStartPre = pkgs.writeShellScript "flycast-broker-pre" ''
+            # flycast loads romm-broker.lua from its config dir; ship it there.
             ${pkgs.coreutils}/bin/install -Dm644 \
               ${flake}/lua/romm-broker.lua ${flycastConfigDir}/romm-broker.lua
+
+            # Force the Vulkan renderer. flycast's OpenGL path leaks host RAM
+            # (~700-1100 MiB/h, radeonsi/Mesa on the 780M; Vulkan is flat with
+            # the same games). emu.cfg is mutable runtime state that flycast
+            # rewrites, so enforce pvr.rend on every start rather than trusting
+            # its persistence.
+            cfg=${flycastConfigDir}/emu.cfg
+            if [ -f "$cfg" ] && ${pkgs.gnugrep}/bin/grep -q '^pvr\.rend = ' "$cfg"; then
+              ${pkgs.gnused}/bin/sed -i 's/^pvr\.rend = .*/pvr.rend = 4/' "$cfg"
+            else
+              ${pkgs.coreutils}/bin/mkdir -p ${flycastConfigDir}
+              printf '[config]\npvr.rend = 4\n' >> "$cfg"
+            fi
           '';
           ExecStart = "${broker}/bin/romm-broker";
         };
