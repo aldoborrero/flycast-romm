@@ -194,6 +194,10 @@ in
           SDL_VIDEODRIVER = "wayland";
           SDL_AUDIODRIVER = "pulseaudio";
           PULSE_RUNTIME_PATH = "${runtimeDir}/pulse";
+          # Point SDL at the fixed device path the selkies joystick interposer
+          # (LD_PRELOAD in flycastWrapped) intercepts — otherwise SDL enumerates
+          # nothing in the container and browser gamepads never reach flycast.
+          SDL_JOYSTICK_DEVICE = "/dev/input/js0";
         };
         serviceConfig = {
           ExecStartPre = pkgs.writeShellScript "flycast-broker-pre" ''
